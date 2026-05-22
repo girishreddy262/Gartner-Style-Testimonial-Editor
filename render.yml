@@ -1,0 +1,43 @@
+name: Render testimonial reels
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'jobs/*.json'
+  schedule:
+    - cron: '*/10 * * * *'   # safety net every 10 min
+  workflow_dispatch:
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm install --prefix . --no-audit --no-fund
+          npm install --prefix remotion --no-audit --no-fund
+
+      - name: Install Chromium for Remotion
+        run: npx remotion browser ensure
+        working-directory: remotion
+
+      - name: Run renderer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DROPBOX_TOKEN: ${{ secrets.DROPBOX_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: node scripts/render-worker.mjs

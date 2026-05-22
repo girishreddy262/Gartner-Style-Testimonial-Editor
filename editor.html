@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Editor — Testimonial</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/editor.css">
+</head>
+<body>
+
+<div id="editorRoot" style="height: 100vh; display: grid; grid-template-rows: 56px 48px 1fr 220px; grid-template-columns: 220px 1fr 300px; grid-template-areas: 'topbar topbar topbar' 'toolbar toolbar toolbar' 'scenes canvas inspector' 'timeline timeline timeline'; background: #1f2937; gap: 1px;">
+
+<header class="topbar" style="grid-area: topbar; border-bottom: 0;">
+  <a href="index.html" class="topbar-brand">
+    <div class="topbar-logo">d</div>
+    <div class="topbar-title">Testimonial editor</div>
+    <span class="topbar-subtitle" id="projectLabel">Loading…</span>
+  </a>
+  <div style="display: flex; gap: 6px; align-items: center;">
+    <span id="statusText" style="font-size: 11px; color: #6b7280; margin-right: 12px;">Ready</span>
+    <button class="btn" id="btnFrameSettings">Frame settings</button>
+    <a class="btn" href="index.html">All projects</a>
+    <button class="btn btn-primary" id="btnApprove">Approve and render</button>
+  </div>
+</header>
+
+<!-- TOOLBAR ROW -->
+<div style="grid-area: toolbar; background: #111827; display: flex; align-items: center; padding: 0 16px; gap: 12px; border-bottom: 1px solid #1f2937;">
+  <div style="display: flex; gap: 4px;">
+    <button class="btn" id="btnPlay" title="Play (space)">▶ Play</button>
+    <button class="btn" id="btnPause" title="Pause">❚❚</button>
+    <button class="btn" id="btnReset" title="Back to start">⏮</button>
+  </div>
+  <div style="width: 1px; height: 20px; background: #1f2937;"></div>
+  <div style="display: flex; gap: 4px;">
+    <button class="btn" id="btnDuplicate" title="Duplicate scene (Ctrl+D)">⎘ Duplicate</button>
+    <button class="btn btn-danger" id="btnDelete" title="Delete scene (Del)">✕ Delete</button>
+  </div>
+  <div style="width: 1px; height: 20px; background: #1f2937;"></div>
+  <div style="display: flex; gap: 4px; align-items: center;">
+    <label style="font-size: 11px; color: #6b7280;">Timeline zoom</label>
+    <input type="range" id="zoomSlider" min="1" max="6" step="0.5" value="1" style="width: 90px;">
+    <span id="zoomLabel" style="font-size: 11px; color: #9ca3af; font-family: ui-monospace,Menlo,monospace; min-width: 32px;">1.0×</span>
+  </div>
+  <div style="flex: 1;"></div>
+  <span style="font-size: 11px; color: #6b7280; font-family: ui-monospace,Menlo,monospace;" id="liveJobId"></span>
+</div>
+
+<!-- LEFT RAIL: scene library + project scenes -->
+<div style="grid-area: scenes; background: #111827; overflow-y: auto; padding: 12px 8px;">
+  <div style="font-size: 10px; font-weight: 600; text-transform: uppercase; color: #6b7280; padding: 0 8px 6px; letter-spacing: 0.5px;">Add to project</div>
+  <button class="btn btn-ghost" data-add="intro" style="width:100%; margin-bottom:4px; justify-content:flex-start;">+ Intro</button>
+  <button class="btn btn-ghost" data-add="namecard" style="width:100%; margin-bottom:4px; justify-content:flex-start;">+ Namecard</button>
+  <button class="btn btn-ghost" data-add="content" style="width:100%; margin-bottom:12px; justify-content:flex-start;">+ Callout</button>
+
+  <div style="font-size: 10px; font-weight: 600; text-transform: uppercase; color: #6b7280; padding: 0 8px 6px; letter-spacing: 0.5px;">Project scenes</div>
+  <div id="sceneList"></div>
+</div>
+
+<!-- CENTER: canvas -->
+<div style="grid-area: canvas; background: #111827; display: flex; align-items: center; justify-content: center; padding: 16px; overflow: hidden;">
+  <div style="width: 100%; max-width: 100%;">
+    <div style="display: flex; justify-content: space-between; font-size: 10px; color: #6b7280; margin-bottom: 6px; padding: 0 4px;">
+      <span>1920 × 1080</span>
+      <span id="canvasInfo">—</span>
+    </div>
+    <div id="stage" class="stage">
+      <div id="stageInner" class="stage-inner">
+
+        <!-- INTRO LAYER -->
+        <div id="introLayer" class="intro-layer">
+          <div id="introHeadline" class="intro-headline">Intro headline</div>
+          <div class="intro-row">
+            <div id="introPortrait" class="intro-portrait"></div>
+            <div id="introMeta" class="intro-meta">
+              <div id="introName" class="intro-name">Speaker</div>
+              <div id="introRole" class="intro-role">Role</div>
+              <div id="introTag" class="intro-tag">Tagline</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- VIDEO LAYER -->
+        <div id="videoLayer" class="video-layer">
+          <div id="frameGroup" class="frame-group">
+            <video id="bgVideo" class="bg-video" muted playsinline preload="auto"></video>
+            <div id="videoPlaceholder" class="video-placeholder">No video loaded</div>
+            <div id="footerBar" class="footer-bar">
+              <div class="footer-darwinbox">
+                <div class="darwinbox-logo">d</div>
+                <span>darwinbox</span>
+              </div>
+              <div class="footer-client" id="footerClient">CR3</div>
+            </div>
+            <div id="namecardEl" class="namecard">
+              <div class="namecard-name" id="namecardName">Speaker name</div>
+              <div class="namecard-role" id="namecardRole">Role</div>
+            </div>
+          </div>
+
+          <!-- CALLOUTS overlay -->
+          <div class="callout-layer">
+            <div id="calloutEl" class="callout"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- RIGHT INSPECTOR -->
+<div style="grid-area: inspector; background: #111827; overflow-y: auto; padding: 14px;">
+  <div style="font-size: 10px; font-weight: 600; text-transform: uppercase; color: #6b7280; margin-bottom: 12px; letter-spacing: 0.5px;">Inspector</div>
+  <div id="inspectorBody" style="color: #9ca3af; font-size: 12px;">Select a scene to edit</div>
+</div>
+
+<!-- BOTTOM: timeline -->
+<div style="grid-area: timeline; background: #111827; padding: 12px 16px; overflow: hidden; display: flex; flex-direction: column;">
+  <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+    <span style="font-family: ui-monospace,Menlo,monospace; font-size: 12px; color: #9ca3af; min-width: 90px;">
+      <span id="curTime" style="color: #fff; font-weight: 500;">0:00</span> /
+      <span id="totalTime">0:00</span>
+    </span>
+  </div>
+  <div id="timelineScrollWrap" style="flex: 1; overflow-x: auto; overflow-y: hidden;">
+    <div id="timelineBar" class="timeline-bar">
+      <div id="playhead" class="playhead"></div>
+      <div id="rulerOverlay" class="ruler-overlay"></div>
+    </div>
+  </div>
+  <div id="timelineLegend" style="display: flex; gap: 16px; font-size: 10px; color: #6b7280; padding-top: 6px;">
+    <span><i class="dot" style="background:#7c3aed"></i>Intro</span>
+    <span><i class="dot" style="background:#fbbf24"></i>Namecard</span>
+    <span><i class="dot" style="background:#0d9488"></i>Meta</span>
+    <span><i class="dot" style="background:#2563eb"></i>Content callout</span>
+    <span style="margin-left:auto;">Click a segment to seek · drag the playhead to scrub</span>
+  </div>
+</div>
+
+</div>
+
+<!-- FRAME SETTINGS MODAL -->
+<div id="frameSettingsModal" class="modal-backdrop" style="display:none;">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Frame position settings</div>
+      <button class="modal-close" id="modalClose">×</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size: 11px; color: #6b7280; margin: 0 0 14px;">
+        Locked to the renderer geometry. Adjust if a specific job needs a different framing.
+      </p>
+
+      <div class="frame-preset">
+        <div class="frame-preset-label">No callout — FULL view</div>
+        <div class="frame-preset-grid">
+          <label>X</label><input type="number" id="fullX">
+          <label>Y</label><input type="number" id="fullY">
+          <label>W</label><input type="number" id="fullW">
+          <label>H</label><input type="number" id="fullH">
+        </div>
+      </div>
+
+      <div class="frame-preset">
+        <div class="frame-preset-label">Callout active — SHRUNK view</div>
+        <div class="frame-preset-grid">
+          <label>X</label><input type="number" id="shrunkX">
+          <label>Y</label><input type="number" id="shrunkY">
+          <label>W</label><input type="number" id="shrunkW">
+          <label>H</label><input type="number" id="shrunkH">
+        </div>
+        <div style="font-size: 10px; color: #6b7280; margin-top: 8px; font-family: ui-monospace,Menlo,monospace;">
+          Scale: <span id="ratioInfo">0.703 W × 0.885 H</span>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn" id="btnResetGeometry">Reset to renderer default</button>
+        <button class="btn btn-primary" id="btnApplyFrame">Apply</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="js/auth.js"></script>
+<script src="js/github-api.js"></script>
+<script src="js/dropbox-api.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/github-api.js"></script>
+<script src="js/dropbox-api.js"></script>
+<script src="js/store.js"></script>
+<script src="js/editor.js"></script>
+</body>
+</html>

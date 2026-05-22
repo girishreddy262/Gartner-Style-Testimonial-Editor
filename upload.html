@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>New project — Testimonial editor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/editor.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a href="index.html" class="topbar-brand">
+    <div class="topbar-logo">d</div>
+    <div class="topbar-title">Testimonial editor</div>
+  </a>
+  <a href="index.html" class="btn">← All projects</a>
+</header>
+
+<main class="page-container">
+  <div class="form-container">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">New testimonial project</h1>
+        <p class="page-subtitle">Upload the speaker video (any size, goes to Dropbox) and the callouts document (small, goes to GitHub). We auto-place callouts on the timeline using the timestamps from your doc.</p>
+      </div>
+    </div>
+
+    <div class="dropzone" id="videoDropzone">
+      <input type="file" id="videoInput" accept=".mp4,.mov,.webm,video/*" style="display:none">
+      <div class="dropzone-icon">▶</div>
+      <div class="dropzone-title">Speaker video</div>
+      <div class="dropzone-sub">Drop a MP4/MOV/WebM file or click to browse</div>
+    </div>
+
+    <div class="dropzone" id="docxDropzone">
+      <input type="file" id="docxInput" accept=".docx" style="display:none">
+      <div class="dropzone-icon">📄</div>
+      <div class="dropzone-title">Callouts document</div>
+      <div class="dropzone-sub">Drop the .docx file with timestamps and callout content</div>
+    </div>
+
+    <div id="previewPanel" style="display:none"></div>
+
+    <div id="uploadProgress" style="display:none; margin-top: 16px;">
+      <div class="progress-row">
+        <div class="progress-name" id="progressStage">Starting…</div>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-pct" id="progressPct">0%</div>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <a href="index.html" class="btn">Cancel</a>
+      <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+        <button class="btn btn-primary" id="submitBtn" disabled>Create project →</button>
+        <div id="submitHint" style="font-size: 11px; color: #6b7280;"></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="vendor/mammoth.browser.min.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/parser.js"></script>
+<script src="js/github-api.js"></script>
+<script src="js/dropbox-api.js"></script>
+<script src="js/store.js"></script>
+<script>
+  const state = { videoFile: null, docxFile: null, parsed: null };
+
+  function setupDropzone(zoneId, inputId, fileType, onFile) {
+    const zone = document.getElementById(zoneId);
+    const input = document.getElementById(inputId);
+    zone.onclick = () => input.click();
+    zone.ondragover = (e) => { e.preventDefault(); zone.classList.add('dragover'); };
+    zone.ondragleave = () => zone.classList.remove('dragover');
+    zone.ondrop = (e) => {
+      e.preventDefault(); zone.classList.remove('dragover');
+      const f = e.dataTransfer.files[0];
+      if (f) handleFile(zone, f, fileType, onFile);
+    };
+    input.onchange = (e) => {
+      const f = e.target.files[0];
+      if (f) handleFile(zone, f, fileType, onFile);
+    };
+  }
+
+  function handleFile(zone, file, fileType, onFile) {
+    if (fileType === 'video' && !file.type.startsWith('video/') && !file.name.match(/\.(mp4|mov|webm)$/i)) {
+      toast('Please choose a video file', 'error'); return;
+    }
+    if (fileType === 'docx' && !file.name.match(/\.docx$/i)) {
+      toast('Please choose a .docx file', 'error'); return;
+    }
+    if (fileType === 'video' && file.size > 2 * 1024 * 1024 * 1024 + 50 * 1024 * 1024) {
+      // Dropbox limit is well over 2GB but we want sane bounds
+      toast('Video files over ~2GB may take a long time to upload.', 'success');
+    }
+
+    zone.classList.add('has-file');
+    const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+    zone.innerHTML = `
+      <div class="dropzone-title">
+        <span style="color:#86efac">✓</span>
+        <span class="dropzone-filename">${escapeHtml(file.name)}</span>
+        <button class="dropzone-remove" data-remove="1" title="Remove">✕</button>
+      </div>
+      <div class="dropzone-meta">${sizeMB} MB</div>
+    `;
+    zone.querySelector('[data-remove]').onclick = (e) => { e.stopPropagation(); resetDropzone(zone, fileType); };
+    onFile(file);
+  }
+
+  function resetDropzone(zone, fileType) {
+    zone.classList.remove('has-file');
+    if (fileType === 'video') {
+      state.videoFile = null;
+      zone.innerHTML = `
+        <input type="file" id="videoInput" accept=".mp4,.mov,.webm,video/*" style="display:none">
+        <div class="dropzone-icon">▶</div>
+        <div class="dropzone-title">Speaker video</div>
+        <div class="dropzone-sub">Drop a MP4/MOV/WebM file or click to browse</div>`;
+      setupDropzone('videoDropzone', 'videoInput', 'video', (f) => { state.videoFile = f; refreshSubmit(); });
+    } else {
+      state.docxFile = null;
+      state.parsed = null;
+      document.getElementById('previewPanel').style.display = 'none';
+      zone.innerHTML = `
+        <input type="file" id="docxInput" accept=".docx" style="display:none">
+        <div class="dropzone-icon">📄</div>
+        <div class="dropzone-title">Callouts document</div>
+        <div class="dropzone-sub">Drop the .docx file with timestamps and callout content</div>`;
+      setupDropzone('docxDropzone', 'docxInput', 'docx', handleDocx);
+    }
+    refreshSubmit();
+  }
+
+  async function handleDocx(file) {
+    state.docxFile = file;
+    refreshSubmit();
+    if (typeof window.mammoth === 'undefined') {
+      toast('DOCX library failed to load. Check the vendor/ folder.', 'error'); return;
+    }
+    try {
+      const buf = await file.arrayBuffer();
+      const parsed = await window.parseCalloutsDocx(buf);
+      state.parsed = parsed;
+      showPreview(parsed);
+      refreshSubmit();
+    } catch (e) {
+      console.error(e);
+      toast('Could not parse the DOCX: ' + e.message, 'error');
+      state.parsed = null;
+      refreshSubmit();
+    }
+  }
+
+  function fmtTime(s) {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return m + ':' + String(sec).padStart(2, '0');
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function showPreview(p) {
+    const panel = document.getElementById('previewPanel');
+    panel.style.display = 'block';
+    panel.className = 'preview-panel';
+
+    let html = `<div class="preview-title">✓ Parsed — ${p.scenes.length} scene${p.scenes.length === 1 ? '' : 's'} detected</div>`;
+    if (p.speaker.name) {
+      html += `<div class="preview-scene" style="border-left-color:#fbbf24">
+        <div class="preview-scene-name">Namecard: ${escapeHtml(p.speaker.name)}${p.speaker.designation ? ' — ' + escapeHtml(p.speaker.designation) : ''}</div>
+        <div class="preview-scene-meta">applied throughout the speaker section</div>
+      </div>`;
+    }
+    if (p.introHeadline) {
+      html += `<div class="preview-scene" style="border-left-color:#a78bfa">
+        <div class="preview-scene-name">Intro: ${escapeHtml(p.introHeadline)}</div>
+        <div class="preview-scene-meta">0:00 – 0:05</div>
+      </div>`;
+    }
+    p.scenes.forEach(s => {
+      let label, klass = '';
+      if (s.type === 'meta') {
+        label = `Meta: ${s.props.items.map(i => i.text).join(' · ')}`; klass = 'meta';
+      } else if (s.layout === 'title_only_dark') {
+        label = `Title: ${s.props.title}`; klass = 'title-only';
+      } else {
+        const n = (s.props.bullets || []).length;
+        label = `${s.props.title} (${n} bullet${n === 1 ? '' : 's'})`;
+      }
+      html += `<div class="preview-scene ${klass}">
+        <div class="preview-scene-name">${escapeHtml(label)}</div>
+        <div class="preview-scene-meta">${fmtTime(s.start)} – ${fmtTime(s.end)} · ${s.layout}</div>
+      </div>`;
+    });
+    panel.innerHTML = html;
+  }
+
+  function refreshSubmit() {
+    const btn = document.getElementById('submitBtn');
+    const hint = document.getElementById('submitHint');
+    const missing = [];
+    if (!state.videoFile) missing.push('video');
+    if (!state.docxFile) missing.push('DOCX');
+    else if (!state.parsed) missing.push('DOCX parse');
+    btn.disabled = missing.length > 0;
+    hint.textContent = missing.length ? 'Waiting on: ' + missing.join(', ') : 'Ready';
+    hint.style.color = missing.length ? '#fbbf24' : '#86efac';
+  }
+
+  function setProgress(stage, pct) {
+    document.getElementById('uploadProgress').style.display = 'block';
+    document.getElementById('progressStage').textContent = stage;
+    document.getElementById('progressFill').style.width = pct + '%';
+    document.getElementById('progressPct').textContent = pct + '%';
+  }
+
+  document.getElementById('submitBtn').onclick = async () => {
+    if (!state.videoFile || !state.docxFile || !state.parsed) return;
+
+    document.getElementById('submitBtn').disabled = true;
+    document.getElementById('submitBtn').textContent = 'Creating...';
+
+    try {
+      const job = await JobStore.createJob({
+        videoFile: state.videoFile,
+        docxFile: state.docxFile,
+        parsed: state.parsed,
+        onProgress: ({ stage, pct }) => setProgress(stage, pct)
+      });
+      toast('Project created — opening editor...', 'success');
+      setTimeout(() => {
+        window.location.href = 'editor.html?jobId=' + encodeURIComponent(job.jobId);
+      }, 500);
+    } catch (e) {
+      console.error(e);
+      toast('Upload failed: ' + e.message, 'error');
+      document.getElementById('submitBtn').disabled = false;
+      document.getElementById('submitBtn').textContent = 'Create project →';
+    }
+  };
+
+  setupDropzone('videoDropzone', 'videoInput', 'video', (f) => { state.videoFile = f; refreshSubmit(); });
+  setupDropzone('docxDropzone', 'docxInput', 'docx', handleDocx);
+
+  Auth.requireOrPrompt(() => refreshSubmit());
+</script>
+
+</body>
+</html>

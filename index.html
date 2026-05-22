@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Testimonial editor — projects</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/editor.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a href="index.html" class="topbar-brand">
+    <div class="topbar-logo">d</div>
+    <div>
+      <div class="topbar-title">Testimonial editor</div>
+    </div>
+  </a>
+  <div style="display: flex; gap: 8px;">
+    <button class="btn" id="btnSettings">Settings</button>
+    <a href="upload.html" class="btn btn-primary">+ New project</a>
+  </div>
+</header>
+
+<main class="page-container">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">Your projects</h1>
+      <p class="page-subtitle">All testimonial videos. Click a project to continue editing or download.</p>
+    </div>
+  </div>
+
+  <div id="loadingState" style="text-align: center; padding: 60px 24px; color: #6b7280;">Loading projects...</div>
+  <div id="jobsList"></div>
+</main>
+
+<script src="js/auth.js"></script>
+<script src="js/github-api.js"></script>
+<script src="js/dropbox-api.js"></script>
+<script src="js/store.js"></script>
+<script>
+  function fmtDate(iso) {
+    const d = new Date(iso);
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+  function statusLabel(s) {
+    return { editing: 'Editing', pending_render: 'Queued', rendering: 'Rendering', complete: 'Done', failed: 'Failed' }[s] || s;
+  }
+
+  async function render() {
+    document.getElementById('loadingState').style.display = 'block';
+    document.getElementById('jobsList').innerHTML = '';
+    try {
+      const jobs = await JobStore.listJobs();
+      document.getElementById('loadingState').style.display = 'none';
+      const list = document.getElementById('jobsList');
+
+      if (jobs.length === 0) {
+        list.innerHTML = `
+          <div class="empty-state">
+            <h2 class="empty-state-title">No projects yet</h2>
+            <p class="empty-state-text">Upload a testimonial video and callouts DOCX to get started.</p>
+            <a href="upload.html" class="btn btn-primary">+ Create your first project</a>
+          </div>`;
+        return;
+      }
+
+      list.innerHTML = '<div class="cards-grid">' + jobs.map(j => {
+        const title = (j.speaker && j.speaker.name) ? j.speaker.name : j.jobId;
+        const sub = (j.speaker && j.speaker.designation) ? j.speaker.designation : (j.introHeadline || '');
+        const status = j.status || 'editing';
+
+        let actions = '';
+        if (status === 'complete' && j.render && j.render.mp4Url) {
+          actions = `<a class="btn btn-primary" href="${j.render.mp4Url}" target="_blank">⬇ Download</a>
+                     <a class="btn" href="editor.html?jobId=${encodeURIComponent(j.jobId)}">Open</a>`;
+        } else if (status === 'rendering' || status === 'pending_render') {
+          actions = `<a class="btn" href="editor.html?jobId=${encodeURIComponent(j.jobId)}">View status</a>`;
+        } else if (status === 'failed') {
+          actions = `<a class="btn" href="editor.html?jobId=${encodeURIComponent(j.jobId)}">Retry</a>`;
+        } else {
+          actions = `<a class="btn btn-primary" href="editor.html?jobId=${encodeURIComponent(j.jobId)}">Edit</a>`;
+        }
+
+        return `
+          <div class="card">
+            <div class="card-thumb">
+              <div class="card-status ${status}">${statusLabel(status)}</div>
+            </div>
+            <div class="card-body">
+              <div class="card-title">${escapeHtml(title)}</div>
+              <div class="card-meta">${escapeHtml(sub)} · ${fmtDate(j.updatedAt)}</div>
+              <div class="card-actions">
+                ${actions}
+                <button class="btn btn-danger" data-delete="${j.jobId}" title="Delete">✕</button>
+              </div>
+            </div>
+          </div>`;
+      }).join('') + '</div>';
+
+      list.querySelectorAll('[data-delete]').forEach(btn => {
+        btn.onclick = async (e) => {
+          e.preventDefault(); e.stopPropagation();
+          if (!confirm('Delete this project? This deletes the video from Dropbox and all assets from GitHub. Cannot be undone.')) return;
+          btn.disabled = true; btn.textContent = '...';
+          try {
+            await JobStore.deleteJob(btn.dataset.delete);
+            toast('Project deleted', 'success');
+            render();
+          } catch (err) {
+            console.error(err);
+            toast('Delete failed: ' + err.message, 'error');
+            btn.disabled = false; btn.textContent = '✕';
+          }
+        };
+      });
+    } catch (e) {
+      console.error(e);
+      document.getElementById('loadingState').innerHTML =
+        '<div style="color: #f87171;">Could not load projects: ' + e.message + '</div>' +
+        '<button class="btn" onclick="Auth.openSettings()" style="margin-top: 12px;">Open settings</button>';
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  document.getElementById('btnSettings').onclick = () => Auth.openSettings();
+
+  Auth.requireOrPrompt(() => render());
+</script>
+
+</body>
+</html>

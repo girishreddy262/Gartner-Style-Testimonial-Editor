@@ -1,0 +1,14 @@
+{
+  "name": "testimonial-callout-editor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render": "node scripts/render-worker.mjs"
+  },
+  "dependencies": {
+    "@octokit/rest": "^21.0.0",
+    "@remotion/bundler": "4.0.190",
+    "@remotion/renderer": "4.0.190"
+  }
+}
