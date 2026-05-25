@@ -1,4 +1,4 @@
-// Editor entry point. Reads jobId from URL, loads job from store, wires up everything.
+// Editor entry point. Reads projectId from URL, loads project from Worker API, wires up everything.
 (async function () {
 'use strict';
 
@@ -25,29 +25,37 @@ const ICON_MAP = {
   location: '<svg viewBox="0 0 24 24" fill="#fff"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>'
 };
 
-// ── Load job ────────────────────────────────────────────────────────────
+// ── Load project ────────────────────────────────────────────────────────
 const params = new URLSearchParams(window.location.search);
-const jobId = params.get('jobId');
-if (!jobId) {
-  alert('No job selected. Returning to projects.');
+const projectId = params.get('projectId') || params.get('jobId'); // support both for transition
+if (!projectId) {
+  alert('No project selected. Returning to projects.');
   window.location.href = 'index.html';
   return;
 }
 
-await new Promise(resolve => Auth.requireOrPrompt(resolve));
-
 let job;
 try {
-  job = await JobStore.getJob(jobId);
+  job = await API.getProject(projectId);
 } catch (e) {
-  alert('Could not load job: ' + e.message);
+  alert('Could not load project: ' + e.message);
   window.location.href = 'index.html';
   return;
 }
 if (!job) {
-  alert('Job not found. Returning to projects.');
+  alert('Project not found. Returning to projects.');
   window.location.href = 'index.html';
   return;
+}
+
+// Get a fresh presigned video URL for playback (the one in the project may have expired)
+try {
+  if (job.s3VideoKey) {
+    const fresh = await API.getVideoPlaybackUrl(projectId);
+    job.videoUrl = fresh;
+  }
+} catch (e) {
+  console.warn('Could not fetch video URL:', e);
 }
 
 // ── State assembly ──────────────────────────────────────────────────────
@@ -165,7 +173,7 @@ function persist() {
         .map(({ _savedProps, ...rest }) => rest);
       const introSceneObj = scenes.find(s => s.type === 'intro')?.props;
       const namecardObj = scenes.find(s => s.type === 'namecard')?.props;
-      const updated = await JobStore.saveJob({
+      const updated = await API.updateProject(projectId, {
         ...job,
         scenes: cleanScenes,
         introScene: introSceneObj,
@@ -173,7 +181,7 @@ function persist() {
         frameSettings: geometry,
         totalDuration
       });
-      job._sha = updated._sha;
+      job = updated;
       const st = document.getElementById('statusText');
       if (st) st.textContent = 'Saved ' + new Date().toLocaleTimeString();
     } catch (e) {
@@ -512,8 +520,9 @@ function wireInspectorEvents() {
       toast('Uploading ' + f.name + '...', 'info');
       try {
         const fileName = field + (f.name.match(/\.\w+$/) || ['.png'])[0];
-        const finalUrl = await JobStore.uploadJobAsset(jobId, fileName, f);
-        s.props[field] = finalUrl;
+        const { uploadUrl, publicUrl } = await API.getAssetUploadUrl(projectId, fileName, f.type || 'image/png');
+        await API.uploadToPresigned(f, uploadUrl);
+        s.props[field] = publicUrl;
         renderCanvas();
         persist();
         toast('Image uploaded', 'success');
@@ -884,16 +893,17 @@ $('btnApprove').onclick = async () => {
     const cleanScenes = scenes
       .filter(s => s.type !== 'intro' && s.type !== 'namecard')
       .map(({ _savedProps, ...rest }) => rest);
-    await JobStore.saveJob({
+    await API.updateProject(projectId, {
       ...job,
-      status: 'pending_render',
       scenes: cleanScenes,
       introScene: scenes.find(s => s.type === 'intro')?.props,
       namecard: scenes.find(s => s.type === 'namecard')?.props,
       frameSettings: geometry,
       totalDuration
     });
-    toast('Project approved. Render will start within a few minutes.', 'success');
+    btn.textContent = 'Starting render...';
+    await API.triggerRender(projectId);
+    toast('Render started — you can watch progress on the project list.', 'success');
     setTimeout(() => { window.location.href = 'index.html'; }, 800);
   } catch (e) {
     toast('Approve failed: ' + e.message, 'error');
@@ -1045,8 +1055,8 @@ function renderAll() {
   updatePlayhead();
 }
 
-$('projectLabel').textContent = (job.speaker?.name || job.jobId);
-$('liveJobId').textContent = jobId;
+$('projectLabel').textContent = (job.speaker?.name || projectId);
+$('liveJobId').textContent = projectId;
 const footerClientEl = $('footerClient');
 if (footerClientEl && job.introHeadline) footerClientEl.textContent = '—';
 

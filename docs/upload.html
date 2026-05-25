@@ -23,7 +23,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">New testimonial project</h1>
-        <p class="page-subtitle">Upload the speaker video (any size, goes to Dropbox) and the callouts document (small, goes to GitHub). We auto-place callouts on the timeline using the timestamps from your doc.</p>
+        <p class="page-subtitle">Upload the speaker video (goes to S3) and the callouts document. Callouts get auto-placed using the timestamps from your doc.</p>
       </div>
     </div>
 
@@ -62,11 +62,8 @@
 </main>
 
 <script src="vendor/mammoth.browser.min.js"></script>
-<script src="js/auth.js"></script>
 <script src="js/parser.js"></script>
-<script src="js/github-api.js"></script>
-<script src="js/dropbox-api.js"></script>
-<script src="js/store.js"></script>
+<script src="js/api.js"></script>
 <script>
   const state = { videoFile: null, docxFile: null, parsed: null };
 
@@ -93,10 +90,6 @@
     }
     if (fileType === 'docx' && !file.name.match(/\.docx$/i)) {
       toast('Please choose a .docx file', 'error'); return;
-    }
-    if (fileType === 'video' && file.size > 2 * 1024 * 1024 * 1024 + 50 * 1024 * 1024) {
-      // Dropbox limit is well over 2GB but we want sane bounds
-      toast('Video files over ~2GB may take a long time to upload.', 'success');
     }
 
     zone.classList.add('has-file');
@@ -141,7 +134,7 @@
     state.docxFile = file;
     refreshSubmit();
     if (typeof window.mammoth === 'undefined') {
-      toast('DOCX library failed to load. Check the vendor/ folder.', 'error'); return;
+      toast('DOCX library failed to load.', 'error'); return;
     }
     try {
       const buf = await file.arrayBuffer();
@@ -157,20 +150,12 @@
     }
   }
 
-  function fmtTime(s) {
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
-    return m + ':' + String(sec).padStart(2, '0');
-  }
-
-  function escapeHtml(s) {
-    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
+  function fmtTime(s) { const m = Math.floor(s / 60); const sec = Math.floor(s % 60); return m + ':' + String(sec).padStart(2, '0'); }
+  function escapeHtml(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
   function showPreview(p) {
     const panel = document.getElementById('previewPanel');
-    panel.style.display = 'block';
-    panel.className = 'preview-panel';
+    panel.style.display = 'block'; panel.className = 'preview-panel';
 
     let html = `<div class="preview-title">✓ Parsed — ${p.scenes.length} scene${p.scenes.length === 1 ? '' : 's'} detected</div>`;
     if (p.speaker.name) {
@@ -187,14 +172,9 @@
     }
     p.scenes.forEach(s => {
       let label, klass = '';
-      if (s.type === 'meta') {
-        label = `Meta: ${s.props.items.map(i => i.text).join(' · ')}`; klass = 'meta';
-      } else if (s.layout === 'title_only_dark') {
-        label = `Title: ${s.props.title}`; klass = 'title-only';
-      } else {
-        const n = (s.props.bullets || []).length;
-        label = `${s.props.title} (${n} bullet${n === 1 ? '' : 's'})`;
-      }
+      if (s.type === 'meta') { label = `Meta: ${s.props.items.map(i => i.text).join(' · ')}`; klass = 'meta'; }
+      else if (s.layout === 'title_only_dark') { label = `Title: ${s.props.title}`; klass = 'title-only'; }
+      else { const n = (s.props.bullets || []).length; label = `${s.props.title} (${n} bullet${n === 1 ? '' : 's'})`; }
       html += `<div class="preview-scene ${klass}">
         <div class="preview-scene-name">${escapeHtml(label)}</div>
         <div class="preview-scene-meta">${fmtTime(s.start)} – ${fmtTime(s.end)} · ${s.layout}</div>
@@ -224,20 +204,55 @@
 
   document.getElementById('submitBtn').onclick = async () => {
     if (!state.videoFile || !state.docxFile || !state.parsed) return;
-
     document.getElementById('submitBtn').disabled = true;
-    document.getElementById('submitBtn').textContent = 'Creating...';
+    document.getElementById('submitBtn').textContent = 'Creating…';
 
     try {
-      const job = await JobStore.createJob({
-        videoFile: state.videoFile,
-        docxFile: state.docxFile,
-        parsed: state.parsed,
-        onProgress: ({ stage, pct }) => setProgress(stage, pct)
+      // 1. Create the project (gets a projectId we can scope uploads to)
+      setProgress('Creating project…', 0);
+      const project = await API.createProject({
+        videoFileName: state.videoFile.name,
+        videoSize: state.videoFile.size,
+        docxFileName: state.docxFile.name,
+        speaker: state.parsed.speaker,
+        introHeadline: state.parsed.introHeadline,
+        scenes: state.parsed.scenes,
+        introScene: {
+          headline: state.parsed.introHeadline || '',
+          name: state.parsed.speaker.name || '',
+          role: state.parsed.speaker.designation || '',
+          tag: '',
+          portraitPath: null,
+          logoPath: null
+        },
+        namecard: {
+          name: state.parsed.speaker.name || '',
+          designation: state.parsed.speaker.designation || ''
+        },
+        frameSettings: {
+          full:   { x: 90,  y: 61,  w: 1766, h: 967 },
+          shrunk: { x: 617, y: 112, w: 1241, h: 856 }
+        }
       });
-      toast('Project created — opening editor...', 'success');
+
+      // 2. Get presigned upload URL
+      setProgress('Preparing upload…', 0);
+      const { uploadUrl, s3Key } = await API.getVideoUploadUrl(
+        project.projectId, state.videoFile.name, state.videoFile.type || 'video/mp4'
+      );
+
+      // 3. Upload video to S3
+      await API.uploadToPresigned(state.videoFile, uploadUrl, ({ loaded, total }) => {
+        setProgress('Uploading video to S3…', Math.round((loaded / total) * 100));
+      });
+
+      // 4. Save the s3Key on the project so we can play it back
+      setProgress('Finalizing project…', 100);
+      await API.updateProject(project.projectId, { s3VideoKey: s3Key });
+
+      toast('Project created — opening editor…', 'success');
       setTimeout(() => {
-        window.location.href = 'editor.html?jobId=' + encodeURIComponent(job.jobId);
+        window.location.href = 'editor.html?projectId=' + encodeURIComponent(project.projectId);
       }, 500);
     } catch (e) {
       console.error(e);
@@ -249,8 +264,6 @@
 
   setupDropzone('videoDropzone', 'videoInput', 'video', (f) => { state.videoFile = f; refreshSubmit(); });
   setupDropzone('docxDropzone', 'docxInput', 'docx', handleDocx);
-
-  Auth.requireOrPrompt(() => refreshSubmit());
 </script>
 
 </body>

@@ -1,0 +1,20 @@
+name = "darwinbox-testimonial-api"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Environment variables (non-secret) — bucket name, region, lambda function name
+[vars]
+S3_BUCKET = "darwinbox-gartner-testimonial-editor"
+AWS_REGION = "ab-south-1"
+REMOTION_LAMBDA_FUNCTION = "remotion-render-4-0-461-mem3008mb-disk5120mb-600sec"
+# Set this after you deploy the Remotion site (see Step 5 in deploy.md)
+REMOTION_SERVE_URL = "https://remotionlambda-apsouth1-9dlkcsayxl.s3.ap-south-1.amazonaws.com/sites/testimonial-editor/index.html"
+
+# KV binding — replace `id` with the namespace ID Cloudflare gave you when you created TESTIMONIAL_KV
+[[kv_namespaces]]
+binding = "TESTIMONIAL_KV"
+id = "e86abe674bad48ffa401a60d73b840b5"
+
+# Secrets (do NOT put values here — set with `wrangler secret put` after deploy):
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
