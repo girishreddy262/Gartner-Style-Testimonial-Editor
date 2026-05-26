@@ -744,6 +744,58 @@
   .icon-picker-option svg { width: 22px; height: 22px; fill: #0183FF; }
   .icon-picker-option-label { font-size: 9px; text-align: center; word-break: break-all; }
 
+  /* Render status overlay — white Darwinbox design (matched from product showcase editor) */
+  .render-overlay {
+    position:fixed; inset:0; z-index:10000;
+    background:#fff;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    color:#1A1D24; font-family:'Satoshi',-apple-system,sans-serif;
+    animation:renderFadeIn 0.4s ease;
+  }
+  @keyframes renderFadeIn { from { opacity:0; } to { opacity:1; } }
+  .render-overlay .ro-icon { font-size:52px; margin-bottom:20px; animation:roPulse 2s ease-in-out infinite; }
+  @keyframes roPulse { 0%,100% { transform:scale(1); opacity:0.85; } 50% { transform:scale(1.08); opacity:1; } }
+  .render-overlay .ro-icon.done { animation:none; }
+  .render-overlay .ro-title { font-size:26px; font-weight:700; color:#003B73; margin-bottom:6px; letter-spacing:-0.3px; }
+  .render-overlay .ro-subtitle { font-size:14px; color:#888; margin-bottom:28px; text-align:center; max-width:500px; line-height:1.5; }
+  .render-overlay .ro-progress-wrap { width:100%; max-width:460px; margin-bottom:12px; }
+  .render-overlay .ro-progress-track { height:8px; background:#EDF6FF; border-radius:4px; overflow:hidden; }
+  .render-overlay .ro-progress-bar { height:100%; background:linear-gradient(90deg,#0183FF,#7ABEFF); border-radius:4px; transition:width 0.8s ease; width:0%; }
+  .render-overlay .ro-progress-bar.complete { background:#7AD163; }
+  .render-overlay .ro-percent { font-size:36px; font-weight:700; color:#0183FF; margin-bottom:2px; }
+  .render-overlay .ro-percent.complete { color:#7AD163; }
+  .render-overlay .ro-status-text { font-size:13px; color:#999; margin-bottom:36px; font-family:ui-monospace,Menlo,monospace; }
+  .render-overlay .ro-stepper { width:100%; max-width:520px; display:flex; align-items:flex-start; justify-content:space-between; position:relative; margin-bottom:36px; }
+  .render-overlay .ro-stepper-line-bg { position:absolute; top:14px; left:40px; right:40px; height:3px; background:#EDF6FF; z-index:0; border-radius:2px; }
+  .render-overlay .ro-stepper-line-fill { position:absolute; top:14px; left:40px; height:3px; background:linear-gradient(90deg,#0183FF,#7ABEFF); z-index:1; border-radius:2px; transition:width 0.8s ease; width:0%; }
+  .render-overlay .ro-step { display:flex; flex-direction:column; align-items:center; width:80px; z-index:2; }
+  .render-overlay .ro-dot { width:30px; height:30px; border-radius:50%; margin-bottom:8px; background:#fff; border:3px solid #E0E0E0; transition:all 0.4s ease; }
+  .render-overlay .ro-dot.done { background:#0183FF; border-color:#0183FF; }
+  .render-overlay .ro-dot.active { background:#fff; border-color:#0183FF; box-shadow:0 0 0 4px rgba(1,131,255,0.15); }
+  .render-overlay .ro-step-label { font-size:11px; font-weight:600; color:#BBB; text-align:center; line-height:1.3; transition:color 0.3s; }
+  .render-overlay .ro-step-label.done { color:#003B73; }
+  .render-overlay .ro-step-label.active { color:#0183FF; }
+  .render-overlay .ro-step-status { font-size:10px; margin-top:3px; color:#CCC; font-weight:600; transition:color 0.3s; }
+  .render-overlay .ro-step-status.done { color:#7AD163; }
+  .render-overlay .ro-step-status.active { color:#0183FF; }
+  .render-overlay .ro-tip { width:100%; max-width:480px; background:#FFFBF0; border:1px solid rgba(253,219,93,0.4); border-radius:10px; padding:14px 20px; display:flex; align-items:center; gap:12px; }
+  .render-overlay .ro-tip-title { font-size:13px; font-weight:600; color:#003B73; }
+  .render-overlay .ro-tip-desc { font-size:12px; color:#888; }
+  .render-overlay .ro-download {
+    display:inline-flex; align-items:center; gap:8px;
+    padding:14px 36px; background:#0183FF; color:#fff;
+    border:none; border-radius:8px; font-size:15px; font-weight:700;
+    text-decoration:none; cursor:pointer; letter-spacing:0.2px;
+    transition:background 0.15s;
+  }
+  .render-overlay .ro-download:hover { background:#006DD5; }
+  .render-overlay .ro-close-btn {
+    margin-top:14px; background:transparent; border:none; color:#999;
+    font-size:13px; cursor:pointer; padding:8px 16px; border-radius:6px;
+    transition:all 0.15s;
+  }
+  .render-overlay .ro-close-btn:hover { background:#f3f4f6; color:#1A1D24; }
+
 </style>
 </head>
 <body>
@@ -2744,7 +2796,7 @@ document.addEventListener('keydown', (e) => {
 // =============================================================
 // SAVE
 // =============================================================
-function saveProject() {
+function saveLocal() {
   const data = {
     intro: state.intro,
     namecard: state.namecard,
@@ -2753,10 +2805,6 @@ function saveProject() {
     callouts: state.callouts
   };
   localStorage.setItem('testimonial_project_v4', JSON.stringify(data));
-  const btn = document.getElementById('saveBtn');
-  const orig = btn.innerHTML;
-  btn.innerHTML = '✓ Saved';
-  setTimeout(() => btn.innerHTML = orig, 1500);
 }
 
 // Load on init
@@ -3034,82 +3082,230 @@ async function uploadVideoToS3(file) {
 }
 
 // =============================================================
-// RENDER FLOW
+// RENDER FLOW — full-screen modal overlay with progress
 // =============================================================
+
+let _renderPollHandle = null;
+let _renderPollDone = false;
+let _renderStepTimers = [];
+let _roStartTime = 0;
+
 async function triggerRender() {
-  if (!currentProjectId) {
-    setStatus('Save the project first', 'error');
+  // Build the project payload. If we have no project id, we can still try to render
+  // by creating a project on the fly. But we MUST have a video uploaded.
+  if (!state.global.s3VideoKey && !state.global.sourceVideoUrl) {
+    showRenderOverlay({ initialError: 'Upload a video first. Go back to Upload, drop in your speaker video and docx, then come back to the editor.' });
     return;
   }
-  // Save first
-  await saveProject(false);
 
-  setStatus('Triggering render…');
-  setRenderButtonState('rendering');
+  // If no project id yet, create one first so render can be triggered.
+  if (!currentProjectId) {
+    showRenderOverlay();
+    setRoTip('Creating project', 'Saving your work to the server before kicking off render...');
+    try {
+      const createRes = await fetch(`${API_BASE}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildProjectPayload()),
+      });
+      if (!createRes.ok) throw new Error(`Create project failed: HTTP ${createRes.status}`);
+      const created = await createRes.json();
+      currentProjectId = created.id || created.projectId || created.jobId;
+      if (!currentProjectId) throw new Error('Server did not return a project id');
+      // Update URL so refresh keeps the project
+      const url = new URL(window.location.href);
+      url.searchParams.set('job_id', currentProjectId);
+      window.history.replaceState({}, '', url);
+    } catch (e) {
+      onRenderComplete(false, null, e.message);
+      return;
+    }
+  } else {
+    showRenderOverlay();
+    setRoTip('Saving project', 'Pushing latest changes to the server before rendering...');
+    // Save the project first
+    try {
+      await saveProject(false);
+    } catch (e) {
+      // Continue even if save fails — render will use the last server state
+      console.warn('Pre-render save failed:', e);
+    }
+  }
+
+  // Trigger render
+  setRoTip('Triggering render', 'Calling the render service...');
   try {
     const res = await fetch(`${API_BASE}/api/projects/${currentProjectId}/render`, {
       method: 'POST',
     });
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`HTTP ${res.status}: ${errText}`);
+      const errText = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}${errText ? ': ' + errText.slice(0, 200) : ''}`);
     }
-    pollRenderStatus();
+    // Render kicked off — polling will tick over
+    setRoTip('Render queued', 'Lambda is picking up the job. First frames coming in ~10s...');
   } catch (e) {
     console.error('Render trigger failed', e);
-    setStatus(`Render failed: ${e.message}`, 'error');
-    setRenderButtonState('idle');
+    onRenderComplete(false, null, e.message);
   }
 }
 
-async function pollRenderStatus() {
-  if (!currentProjectId) return;
-  let attempt = 0;
-  const maxAttempts = 120; // ~10 minutes at 5s intervals
-  const interval = setInterval(async () => {
-    attempt++;
-    if (attempt > maxAttempts) {
-      clearInterval(interval);
-      setStatus('Render timed out', 'error');
-      setRenderButtonState('idle');
-      return;
-    }
-    try {
-      const res = await fetch(`${API_BASE}/api/projects/${currentProjectId}/render-status`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const j = await res.json();
-      const progressPct = j.progress != null ? Math.round(j.progress * 100) : null;
-      if (j.status === 'rendering') {
-        setStatus(`Rendering… ${progressPct != null ? progressPct + '%' : ''}`);
-      } else if (j.status === 'complete' || j.outputUrl) {
-        clearInterval(interval);
-        setStatus('Render complete!');
-        setRenderButtonState('complete', j.outputUrl);
-      } else if (j.status === 'failed' || j.errors) {
-        clearInterval(interval);
-        setStatus(`Render failed: ${j.errors || 'unknown'}`, 'error');
-        setRenderButtonState('idle');
-      }
-    } catch (e) {
-      console.warn('Poll failed', e);
-    }
-  }, 5000);
+function showRenderOverlay(options = {}) {
+  // Don't double-render
+  if (document.getElementById('renderOverlay')) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'render-overlay';
+  overlay.id = 'renderOverlay';
+  overlay.innerHTML =
+    '<div class="ro-icon" id="roIcon">🎬</div>' +
+    '<div class="ro-title" id="roTitle">Rendering your video</div>' +
+    '<div class="ro-subtitle" id="roSubtitle">Sit back and chill — your testimonial video will be ready in a few minutes.</div>' +
+    '<div class="ro-progress-wrap"><div class="ro-progress-track"><div class="ro-progress-bar" id="roBar"></div></div></div>' +
+    '<div class="ro-percent" id="roPercent">0%</div>' +
+    '<div class="ro-status-text" id="roStatus">Initializing...</div>' +
+    '<div class="ro-stepper" id="roStepper">' +
+      '<div class="ro-stepper-line-bg"></div>' +
+      '<div class="ro-stepper-line-fill" id="roLineFill"></div>' +
+      '<div class="ro-step" id="roS1"><div class="ro-dot" id="roD1"></div><div class="ro-step-label" id="roL1">Saving<br>project</div><div class="ro-step-status" id="roSt1">Pending</div></div>' +
+      '<div class="ro-step" id="roS2"><div class="ro-dot" id="roD2"></div><div class="ro-step-label" id="roL2">Bundling<br>assets</div><div class="ro-step-status" id="roSt2">Pending</div></div>' +
+      '<div class="ro-step" id="roS3"><div class="ro-dot" id="roD3"></div><div class="ro-step-label" id="roL3">Rendering<br>frames</div><div class="ro-step-status" id="roSt3">Pending</div></div>' +
+      '<div class="ro-step" id="roS4"><div class="ro-dot" id="roD4"></div><div class="ro-step-label" id="roL4">Encoding<br>video</div><div class="ro-step-status" id="roSt4">Pending</div></div>' +
+      '<div class="ro-step" id="roS5"><div class="ro-dot" id="roD5"></div><div class="ro-step-label" id="roL5">Uploading<br>to S3</div><div class="ro-step-status" id="roSt5">Pending</div></div>' +
+    '</div>' +
+    '<div class="ro-tip" id="roTip">' +
+      '<span style="font-size:20px;">✨</span>' +
+      '<div><div class="ro-tip-title" id="roTipTitle">Getting started</div>' +
+      '<div class="ro-tip-desc" id="roTipDesc">Setting up the render pipeline...</div></div>' +
+    '</div>' +
+    '<div id="roDownloadWrap" style="display:none; margin-top:24px;"></div>' +
+    '<button class="ro-close-btn" id="roCloseBtn" onclick="hideRenderOverlay()">Close</button>';
+
+  document.body.appendChild(overlay);
+
+  // If we were called with an initial error, render error state immediately
+  if (options.initialError) {
+    onRenderComplete(false, null, options.initialError);
+    return;
+  }
+
+  _renderPollDone = false;
+  _roStartTime = Date.now();
+  _renderStepTimers = [];
+  // Optimistic step animation while we wait for real status (matches product showcase editor pattern)
+  _renderStepTimers.push(setTimeout(() => setRoStep(1, 8, 'Saving project...', 'Warming up', 'Saving your project state to the server...'), 500));
+  _renderStepTimers.push(setTimeout(() => setRoStep(2, 22, 'Bundling assets...', 'Reading your edits', 'Loading video, callouts, and intro assets...'), 4000));
+  _renderStepTimers.push(setTimeout(() => setRoStep(3, 48, 'Rendering frames...', 'This is the big one', 'Rendering each frame of your video — this takes the longest.'), 12000));
+  _renderStepTimers.push(setTimeout(() => setRoStep(4, 72, 'Encoding video...', 'Almost there!', 'Encoding the frames into MP4...'), 60000));
+  _renderStepTimers.push(setTimeout(() => setRoStep(5, 88, 'Uploading to S3...', 'Wrapping up', 'Uploading the final MP4 for download...'), 90000));
+  _renderStepTimers.push(setTimeout(() => { if (!_renderPollDone) { setRoPercent(92); setRoTip('Hang tight', 'Complex videos can take 3-5 minutes...'); } }, 130000));
+  _renderStepTimers.push(setTimeout(() => { if (!_renderPollDone) { setRoPercent(95); setRoTip('Still working', 'The render is still in progress — please don\'t close this tab.'); } }, 200000));
+
+  _renderPollHandle = setInterval(pollRenderStatus, 5000);
+  setTimeout(pollRenderStatus, 8000);
 }
 
-function setRenderButtonState(s, downloadUrl) {
-  const btn = document.getElementById('renderBtn');
-  if (!btn) return;
-  if (s === 'idle') {
-    btn.disabled = false;
-    btn.textContent = 'Approve & render →';
-    btn.onclick = triggerRender;
-  } else if (s === 'rendering') {
-    btn.disabled = true;
-    btn.textContent = 'Rendering…';
-  } else if (s === 'complete' && downloadUrl) {
-    btn.disabled = false;
-    btn.textContent = '⬇ Download MP4';
-    btn.onclick = () => window.open(downloadUrl, '_blank');
+function hideRenderOverlay() {
+  const o = document.getElementById('renderOverlay');
+  if (o) o.remove();
+  if (_renderPollHandle) { clearInterval(_renderPollHandle); _renderPollHandle = null; }
+  _renderStepTimers.forEach(t => clearTimeout(t));
+  _renderStepTimers = [];
+  _renderPollDone = false;
+}
+
+function setRoStep(stepNum, percent, statusText, tipTitle, tipDesc) {
+  if (_renderPollDone) return;
+  for (let i = 1; i < stepNum; i++) {
+    const d = document.getElementById('roD' + i); if (d) d.className = 'ro-dot done';
+    const l = document.getElementById('roL' + i); if (l) l.className = 'ro-step-label done';
+    const s = document.getElementById('roSt' + i); if (s) { s.className = 'ro-step-status done'; s.textContent = 'Done'; }
+  }
+  const dot = document.getElementById('roD' + stepNum); if (dot) dot.className = 'ro-dot active';
+  const lbl = document.getElementById('roL' + stepNum); if (lbl) lbl.className = 'ro-step-label active';
+  const st = document.getElementById('roSt' + stepNum); if (st) { st.className = 'ro-step-status active'; st.textContent = 'In progress'; }
+  const linePercent = Math.min(100, ((stepNum - 1) / 4) * 100);
+  const line = document.getElementById('roLineFill'); if (line) line.style.width = linePercent + '%';
+  setRoPercent(percent);
+  if (statusText) { const s2 = document.getElementById('roStatus'); if (s2) s2.textContent = statusText; }
+  if (tipTitle) setRoTip(tipTitle, tipDesc || '');
+}
+
+function setRoPercent(pct) {
+  if (_renderPollDone) return;
+  const bar = document.getElementById('roBar'); if (bar) bar.style.width = pct + '%';
+  const pe = document.getElementById('roPercent'); if (pe) pe.textContent = pct + '%';
+}
+
+function setRoTip(title, desc) {
+  const t = document.getElementById('roTipTitle'); if (t) t.textContent = title;
+  const d = document.getElementById('roTipDesc'); if (d) d.textContent = desc;
+}
+
+async function pollRenderStatus() {
+  if (_renderPollDone || !currentProjectId) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/projects/${currentProjectId}/render-status`, { cache: 'no-store' });
+    if (!res.ok) {
+      // Non-OK is OK while render is in flight; just keep polling
+      if (res.status !== 404) console.warn('Status poll non-OK:', res.status);
+      return;
+    }
+    const data = await res.json();
+    // Update progress based on the real status if available
+    if (data.progress != null) {
+      const pct = Math.max(8, Math.round(data.progress * 100));
+      // Don't go backwards
+      const cur = parseInt((document.getElementById('roPercent')?.textContent || '0').replace('%','')) || 0;
+      if (pct > cur && pct < 100) setRoPercent(pct);
+    }
+    if (data.status === 'complete' || data.status === 'success' || data.outputUrl || data.mp4Url) {
+      onRenderComplete(true, data.outputUrl || data.mp4Url || data.artifactUrl);
+    } else if (data.status === 'failed' || data.status === 'error' || data.errors) {
+      onRenderComplete(false, null, data.errors || data.error || 'Render failed without an error message');
+    }
+    // Otherwise still rendering — keep polling
+  } catch (e) {
+    // Network errors are expected occasionally — keep quiet
+    console.warn('Poll error:', e.message);
+  }
+}
+
+function onRenderComplete(success, downloadUrl, errorMessage) {
+  _renderPollDone = true;
+  if (_renderPollHandle) { clearInterval(_renderPollHandle); _renderPollHandle = null; }
+  _renderStepTimers.forEach(t => clearTimeout(t));
+  _renderStepTimers = [];
+
+  if (success) {
+    const stepper = document.getElementById('roStepper'); if (stepper) stepper.style.display = 'none';
+    const subtitle = document.getElementById('roSubtitle'); if (subtitle) subtitle.style.display = 'none';
+    const tip = document.getElementById('roTip'); if (tip) tip.style.display = 'none';
+    const icon = document.getElementById('roIcon'); if (icon) { icon.textContent = '🎉'; icon.classList.add('done'); }
+    const title = document.getElementById('roTitle'); if (title) title.textContent = 'Your testimonial video is ready!';
+    const bar = document.getElementById('roBar'); if (bar) { bar.style.width = '100%'; bar.classList.add('complete'); }
+    const pct = document.getElementById('roPercent'); if (pct) { pct.textContent = '100%'; pct.classList.add('complete'); }
+    const status = document.getElementById('roStatus'); if (status) status.textContent = 'Render complete!';
+    const wrap = document.getElementById('roDownloadWrap');
+    if (wrap && downloadUrl) {
+      wrap.style.display = 'block';
+      wrap.innerHTML = '<a class="ro-download" href="' + downloadUrl.replace(/"/g, '&quot;') + '" download target="_blank">↓ Download video</a>';
+    }
+  } else {
+    const icon2 = document.getElementById('roIcon'); if (icon2) { icon2.textContent = '❌'; icon2.classList.add('done'); }
+    const title2 = document.getElementById('roTitle'); if (title2) title2.textContent = 'Render failed';
+    const friendly = errorMessage && errorMessage.length ? errorMessage : 'Something went wrong during rendering.';
+    const subtitle2 = document.getElementById('roSubtitle');
+    if (subtitle2) {
+      subtitle2.style.display = 'block';
+      subtitle2.innerHTML = friendly.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) +
+        '<br><br>Close this and try again. If it keeps failing, check that the video uploaded successfully and the project saved.';
+    }
+    const stepper2 = document.getElementById('roStepper'); if (stepper2) stepper2.style.display = 'none';
+    const bar2 = document.getElementById('roBar'); if (bar2) { bar2.style.width = '100%'; bar2.style.background = '#ef4444'; }
+    const pct2 = document.getElementById('roPercent'); if (pct2) { pct2.textContent = '—'; pct2.style.color = '#ef4444'; }
+    const status2 = document.getElementById('roStatus'); if (status2) status2.textContent = 'Render failed';
+    const tip2 = document.getElementById('roTip'); if (tip2) tip2.style.display = 'none';
   }
 }
 
