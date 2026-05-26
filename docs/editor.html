@@ -2913,43 +2913,47 @@ function hydrateFromProject(p) {
   if (p.namecard) Object.assign(state.namecard, p.namecard);
   if (p.global) Object.assign(state.global, p.global);
   if (Array.isArray(p.callouts)) state.callouts = p.callouts;
-  // If the project has an S3 video key, swap in a presigned GET URL for playback
-  if (p.s3VideoKey) {
-    fetchVideoPlaybackUrl(currentProjectId).then(url => {
-      if (url) {
-        state.global.sourceVideoUrl = url;
-        // Replace video element src
-        const old = document.getElementById('videoImg');
-        if (old && old.tagName === 'VIDEO') {
-          old.src = url;
-        } else {
-          // Swap img for video
-          const v = document.createElement('video');
-          v.id = 'videoImg';
-          v.src = url;
-          v.loop = true;
-          v.muted = false;
-          v.playsInline = true;
-          v.preload = 'auto';
-          v.crossOrigin = 'anonymous';
-          v.style.cssText = 'display:block;width:100%;height:100%;object-fit:cover;object-position:center;';
-          old.replaceWith(v);
-        }
-        renderAll();
-      }
-    });
-  }
+
+  // Always try to fetch the playback URL for the video.
+  // The Worker's /video-url endpoint returns null if no video is associated with the project,
+  // so it's safe to call unconditionally. We don't gate on a flag in the project state
+  // because Worker stores the video key under several possible names depending on version.
+  fetchVideoPlaybackUrl(currentProjectId).then(url => {
+    if (!url) return;
+    state.global.sourceVideoUrl = url;
+    // Replace video element src — original is an <img>, swap for <video>
+    const old = document.getElementById('videoImg');
+    if (!old) return;
+    if (old.tagName === 'VIDEO') {
+      old.src = url;
+      old.load();
+    } else {
+      const v = document.createElement('video');
+      v.id = 'videoImg';
+      v.src = url;
+      v.loop = true;
+      v.muted = false;
+      v.playsInline = true;
+      v.preload = 'auto';
+      v.crossOrigin = 'anonymous';
+      v.style.cssText = 'display:block;width:100%;height:100%;object-fit:cover;object-position:center;';
+      old.replaceWith(v);
+    }
+    renderAll();
+  }).catch(e => console.warn('Could not load video playback URL:', e));
+
   renderAll();
 }
 
-// API: get presigned playback URL for the project's video
+// API: get presigned playback URL for the project's video.
+// Worker returns { videoUrl: "https://..." } (or { url: "..." } on older versions).
 async function fetchVideoPlaybackUrl(projectId) {
   if (!projectId) return null;
   try {
     const res = await fetch(`${API_BASE}/api/projects/${projectId}/video-url`);
     if (!res.ok) return null;
     const j = await res.json();
-    return j.url || null;
+    return j.videoUrl || j.url || null;
   } catch (e) { console.warn('Video URL fetch failed', e); return null; }
 }
 
