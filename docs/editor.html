@@ -756,7 +756,7 @@
     </div>
     <div style="flex:1"></div>
     <button class="btn ghost" id="saveBtn">💾 Save <kbd style="background:rgba(255,255,255,0.05);padding:1px 4px;margin-left:4px;border-radius:2px;font-size:10px;">⌘S</kbd></button>
-    <button class="btn primary">Approve &amp; render →</button>
+    <button class="btn primary" id="renderBtn">Approve &amp; render →</button>
   </div>
 
   <div class="main">
@@ -2825,6 +2825,343 @@ introHeadlineEl.addEventListener('keydown', (e) => {
 document.getElementById('timeTotal').textContent = fmtTime(TOTAL);
 renderAll();
 setTimeout(() => document.getElementById('zoomFit').click(), 100);
+
+// =============================================================
+// BACKEND API INTEGRATION
+// =============================================================
+// Talks to the Cloudflare Worker (S3 + Lambda render orchestration).
+const API_BASE = 'https://darwinbox-testimonial-api.girishreddy262.workers.dev';
+
+// Extract job_id from query string. Editor opens with ?job_id=... after upload.html POST.
+function getJobIdFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('job_id') || params.get('projectId') || null;
+}
+
+// Current project id. Set on load (from URL) or after first save.
+let currentProjectId = getJobIdFromUrl();
+
+// Build the project payload sent to the Worker. Excludes large blob URLs.
+function buildProjectPayload() {
+  return {
+    intro: { ...state.intro },
+    namecard: { ...state.namecard },
+    global: {
+      ...state.global,
+      // S3 keys travel; blob URLs do not (they're regenerated server-side via presigned GET)
+      sourceVideoUrl: state.global.sourceVideoUrl && state.global.sourceVideoUrl.startsWith('blob:') ? null : state.global.sourceVideoUrl,
+      clientLogoUrl: state.global.clientLogoUrl && state.global.clientLogoUrl.startsWith('blob:') ? null : state.global.clientLogoUrl,
+    },
+    callouts: state.callouts,
+    totalDuration: TOTAL,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+// Hydrate state from a project fetched from the Worker.
+function hydrateFromProject(p) {
+  if (!p) return;
+  if (p.intro) Object.assign(state.intro, p.intro);
+  if (p.namecard) Object.assign(state.namecard, p.namecard);
+  if (p.global) Object.assign(state.global, p.global);
+  if (Array.isArray(p.callouts)) state.callouts = p.callouts;
+  // If the project has an S3 video key, swap in a presigned GET URL for playback
+  if (p.s3VideoKey) {
+    fetchVideoPlaybackUrl(currentProjectId).then(url => {
+      if (url) {
+        state.global.sourceVideoUrl = url;
+        // Replace video element src
+        const old = document.getElementById('videoImg');
+        if (old && old.tagName === 'VIDEO') {
+          old.src = url;
+        } else {
+          // Swap img for video
+          const v = document.createElement('video');
+          v.id = 'videoImg';
+          v.src = url;
+          v.loop = true;
+          v.muted = false;
+          v.playsInline = true;
+          v.preload = 'auto';
+          v.crossOrigin = 'anonymous';
+          v.style.cssText = 'display:block;width:100%;height:100%;object-fit:cover;object-position:center;';
+          old.replaceWith(v);
+        }
+        renderAll();
+      }
+    });
+  }
+  renderAll();
+}
+
+// API: get presigned playback URL for the project's video
+async function fetchVideoPlaybackUrl(projectId) {
+  if (!projectId) return null;
+  try {
+    const res = await fetch(`${API_BASE}/api/projects/${projectId}/video-url`);
+    if (!res.ok) return null;
+    const j = await res.json();
+    return j.url || null;
+  } catch (e) { console.warn('Video URL fetch failed', e); return null; }
+}
+
+// API: load project on startup
+async function loadProjectFromServer() {
+  if (!currentProjectId) return;
+  setStatus('Loading…');
+  try {
+    const res = await fetch(`${API_BASE}/api/projects/${currentProjectId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const project = await res.json();
+    hydrateFromProject(project);
+    setStatus('Loaded');
+    setTimeout(() => setStatus(''), 1500);
+  } catch (e) {
+    console.error('Load failed', e);
+    setStatus('Load failed — using local data', 'error');
+  }
+}
+
+// API: save project to the Worker (debounced)
+let saveTimer = null;
+let savingInFlight = false;
+async function saveProject(manual = false) {
+  if (!currentProjectId) {
+    // No project id — fall back to localStorage only
+    saveLocal();
+    if (manual) flashSaveButton();
+    return;
+  }
+  if (savingInFlight) return;
+  savingInFlight = true;
+  if (manual) setStatus('Saving…');
+  try {
+    const payload = buildProjectPayload();
+    const res = await fetch(`${API_BASE}/api/projects/${currentProjectId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    saveLocal();
+    if (manual) {
+      flashSaveButton();
+      setStatus('Saved');
+      setTimeout(() => setStatus(''), 1200);
+    }
+  } catch (e) {
+    console.error('Save failed', e);
+    saveLocal();
+    setStatus('Server save failed — saved locally', 'error');
+  } finally {
+    savingInFlight = false;
+  }
+}
+
+function scheduleSave() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { saveTimer = null; saveProject(false); }, 2000);
+}
+
+function flashSaveButton() {
+  const btn = document.getElementById('saveBtn');
+  if (!btn) return;
+  const orig = btn.innerHTML;
+  btn.innerHTML = '✓ Saved';
+  setTimeout(() => btn.innerHTML = orig, 1500);
+}
+
+// Wire save button to server save
+const _saveBtn = document.getElementById('saveBtn');
+if (_saveBtn) {
+  _saveBtn.onclick = () => saveProject(true);
+}
+
+// Cmd/Ctrl+S
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault();
+    saveProject(true);
+  }
+});
+
+// Listen for state changes via every input bind. We hook into the existing bindInspector
+// flow by patching renderCanvas (called on every state change) to also trigger save.
+const _origRenderCanvas = renderCanvas;
+window.renderCanvas = function() {
+  _origRenderCanvas.apply(this, arguments);
+  if (currentProjectId) scheduleSave();
+};
+
+// =============================================================
+// VIDEO UPLOAD — presigned PUT to S3
+// =============================================================
+// Replace bindUploadZone's behavior for the source video to also upload to S3.
+async function uploadVideoToS3(file) {
+  if (!currentProjectId) {
+    setStatus('No project id — cannot upload', 'error');
+    return null;
+  }
+  setStatus('Requesting upload URL…');
+  try {
+    const presignRes = await fetch(`${API_BASE}/api/projects/${currentProjectId}/upload-url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contentType: file.type, fileName: file.name }),
+    });
+    if (!presignRes.ok) throw new Error(`Presign HTTP ${presignRes.status}`);
+    const { uploadUrl, s3Key } = await presignRes.json();
+
+    setStatus('Uploading video to S3…');
+    const putRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type },
+      body: file,
+    });
+    if (!putRes.ok) throw new Error(`S3 PUT HTTP ${putRes.status}`);
+
+    // Save the S3 key to project state
+    state.global.s3VideoKey = s3Key;
+    setStatus('Upload complete');
+    setTimeout(() => setStatus(''), 1500);
+    saveProject(false);
+    return s3Key;
+  } catch (e) {
+    console.error('Video upload failed', e);
+    setStatus('Upload failed', 'error');
+    return null;
+  }
+}
+
+// =============================================================
+// RENDER FLOW
+// =============================================================
+async function triggerRender() {
+  if (!currentProjectId) {
+    setStatus('Save the project first', 'error');
+    return;
+  }
+  // Save first
+  await saveProject(false);
+
+  setStatus('Triggering render…');
+  setRenderButtonState('rendering');
+  try {
+    const res = await fetch(`${API_BASE}/api/projects/${currentProjectId}/render`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`HTTP ${res.status}: ${errText}`);
+    }
+    pollRenderStatus();
+  } catch (e) {
+    console.error('Render trigger failed', e);
+    setStatus(`Render failed: ${e.message}`, 'error');
+    setRenderButtonState('idle');
+  }
+}
+
+async function pollRenderStatus() {
+  if (!currentProjectId) return;
+  let attempt = 0;
+  const maxAttempts = 120; // ~10 minutes at 5s intervals
+  const interval = setInterval(async () => {
+    attempt++;
+    if (attempt > maxAttempts) {
+      clearInterval(interval);
+      setStatus('Render timed out', 'error');
+      setRenderButtonState('idle');
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/projects/${currentProjectId}/render-status`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const j = await res.json();
+      const progressPct = j.progress != null ? Math.round(j.progress * 100) : null;
+      if (j.status === 'rendering') {
+        setStatus(`Rendering… ${progressPct != null ? progressPct + '%' : ''}`);
+      } else if (j.status === 'complete' || j.outputUrl) {
+        clearInterval(interval);
+        setStatus('Render complete!');
+        setRenderButtonState('complete', j.outputUrl);
+      } else if (j.status === 'failed' || j.errors) {
+        clearInterval(interval);
+        setStatus(`Render failed: ${j.errors || 'unknown'}`, 'error');
+        setRenderButtonState('idle');
+      }
+    } catch (e) {
+      console.warn('Poll failed', e);
+    }
+  }, 5000);
+}
+
+function setRenderButtonState(s, downloadUrl) {
+  const btn = document.getElementById('renderBtn');
+  if (!btn) return;
+  if (s === 'idle') {
+    btn.disabled = false;
+    btn.textContent = 'Approve & render →';
+    btn.onclick = triggerRender;
+  } else if (s === 'rendering') {
+    btn.disabled = true;
+    btn.textContent = 'Rendering…';
+  } else if (s === 'complete' && downloadUrl) {
+    btn.disabled = false;
+    btn.textContent = '⬇ Download MP4';
+    btn.onclick = () => window.open(downloadUrl, '_blank');
+  }
+}
+
+// Wire the render button
+const _renderBtn = document.getElementById('renderBtn');
+if (_renderBtn) {
+  _renderBtn.onclick = triggerRender;
+}
+
+// =============================================================
+// STATUS BAR (small inline message in the topbar)
+// =============================================================
+function setStatus(msg, type = 'info') {
+  let bar = document.getElementById('statusBar');
+  if (!bar) {
+    bar = document.createElement('span');
+    bar.id = 'statusBar';
+    bar.style.cssText = 'margin-right: 16px; color: #94a3b8; font-size: 13px; transition: color 0.2s;';
+    const tb = document.querySelector('.topbar');
+    if (tb) tb.insertBefore(bar, document.getElementById('saveBtn'));
+  }
+  bar.textContent = msg || '';
+  bar.style.color = type === 'error' ? '#FC6A6B' : '#94a3b8';
+}
+
+// =============================================================
+// SOURCE VIDEO UPLOAD — intercept the existing file picker to upload to S3
+// =============================================================
+// Wrap the original Source video upload zone handler so it ALSO uploads to S3.
+(function wireVideoUpload() {
+  const zone = document.getElementById('zoneSourceVideo');
+  const input = zone ? zone.querySelector('input[type="file"]') : null;
+  if (!zone || !input) return;
+  input.addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file || !file.type.startsWith('video/')) return;
+    // The existing handler already set blob URL and rendered. Now also upload.
+    if (currentProjectId) {
+      await uploadVideoToS3(file);
+    }
+  });
+})();
+
+// =============================================================
+// INITIAL LOAD: if we have a job_id, hydrate from server
+// =============================================================
+if (currentProjectId) {
+  loadProjectFromServer();
+} else {
+  // No project id in URL — operate offline-only
+  setStatus('Working offline (no server save)', 'info');
+}
 
 </script>
 </body>
