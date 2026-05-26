@@ -1,10 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import {
   AbsoluteFill,
   useCurrentFrame,
   useVideoConfig,
-  delayRender,
-  continueRender,
 } from 'remotion';
 import { Intro } from './scenes/Intro';
 import { Frame } from './scenes/Frame';
@@ -35,16 +33,21 @@ interface Props {
   callouts: any[];
 }
 
-// Load Satoshi font from Fontshare CDN. Remotion delays first render until loaded.
-const loadFonts = async () => {
+// Load Satoshi font from Fontshare CDN.
+// NOTE: NOT wrapped in delayRender — Lambda's headless Chromium can time out reaching
+// Fontshare which would fail the whole render. Fonts load async; if not ready when
+// frames render, browser falls back to the next font in the stack. Minor visual diff
+// is acceptable; render completing matters more.
+const loadFonts = () => {
+  if (typeof document === 'undefined') return;
+  // Inject only once
+  if (document.getElementById('satoshi-font')) return;
   const link = document.createElement('link');
+  link.id = 'satoshi-font';
   link.rel = 'stylesheet';
   link.href =
     'https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700,900&display=swap';
   document.head.appendChild(link);
-
-  // Wait for the font to actually be loaded by the browser
-  await document.fonts.ready;
 };
 
 export const TestimonialReel: React.FC<Props> = ({
@@ -64,13 +67,11 @@ export const TestimonialReel: React.FC<Props> = ({
     (c: any) => t >= c.start && t <= c.end
   );
 
-  // Font loading — block render until Satoshi is ready
-  const [handle] = useState(() => delayRender('Loading Satoshi font'));
+  // Kick off font load — non-blocking. If fonts aren't ready by frame render
+  // time, browser falls back to sans-serif. Better than failing the whole render.
   useEffect(() => {
-    loadFonts()
-      .then(() => continueRender(handle))
-      .catch(() => continueRender(handle)); // continue even on failure
-  }, [handle]);
+    loadFonts();
+  }, []);
 
   return (
     <AbsoluteFill
