@@ -96,7 +96,7 @@ jobs:
             namecard: .namecard.name,
             totalDuration,
             callouts: (.callouts | length),
-            videoUrl: .global.sourceVideoUrl[:80] + "..."
+            videoUrl: .global.sourceVideoUrl
           }' input-props.json
 
       - name: Render the video locally with Remotion CLI
