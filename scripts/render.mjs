@@ -24,7 +24,7 @@ const FUNCTION_NAME = process.env.REMOTION_FUNCTION_NAME || 'remotion-render-4-0
 const SERVE_URL = process.env.REMOTION_SERVE_URL || 'https://remotionlambda-apsouth1-9dlkcsayxl.s3.ap-south-1.amazonaws.com/sites/testimonial-editor/index.html';
 const OUTPUT_BUCKET = process.env.OUTPUT_BUCKET || 'darwinbox-gartner-testimonial-editor';
 const FPS = 30;
-const FRAMES_PER_CHUNK = parseInt(process.env.FRAMES_PER_CHUNK || '4500', 10);
+const FRAMES_PER_CHUNK = parseInt(process.env.FRAMES_PER_CHUNK || '9000', 10);
 const MAX_CHUNK_RETRIES = 2;
 
 const args = process.argv.slice(2);
@@ -121,6 +121,14 @@ async function renderChunkWithRetry(chunk) {
         frameRange: chunk.frameRange,
         maxRetries: 3,
         concurrencyPerLambda: 1,
+        // The launch Lambda waits for chunks via this timeout. Set generous —
+        // Lambda's hard timeout is 15min, our function has 900s (15min) configured.
+        // Default of 30000ms causes 'stitcher' AbortError when render takes >30s.
+        timeoutInMilliseconds: 840000, // 14 minutes
+        audioCodec: 'aac',
+        muted: true,
+        offthreadVideoCacheSizeInBytes: 524288000,
+        downloadBehavior: { type: 'download' },
         outName: {
           bucketName: OUTPUT_BUCKET,
           key: chunk.outputKey,
@@ -178,7 +186,22 @@ async function pollChunk({ chunk, renderId, bucketName }) {
   }
 }
 
-const results = await Promise.all(chunks.map(renderChunkWithRetry));
+// Render chunks SEQUENTIALLY with a 30-second pause between them.
+// The pause lets HTTP connections/streams from the previous render drain before
+// the next one starts — AbortError stacks frequently happen when S3 read/write
+// streams from a finished render get aborted by AWS SDK because the next render
+// is competing for the connection pool.
+const results = [];
+for (let i = 0; i < chunks.length; i++) {
+  const chunk = chunks[i];
+  if (i > 0) {
+    console.log('\n  Pausing 30s before next chunk (let connections drain)...');
+    await new Promise((r) => setTimeout(r, 30000));
+  }
+  console.log(`\n=== Rendering Part ${chunk.index}/${chunks.length} ===`);
+  const result = await renderChunkWithRetry(chunk);
+  results.push(result);
+}
 
 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 console.log('');
