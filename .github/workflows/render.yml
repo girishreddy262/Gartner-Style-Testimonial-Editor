@@ -14,7 +14,7 @@ on:
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -25,7 +25,7 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install root deps
+      - name: Install render-script deps
         run: npm install --no-audit --no-fund
         working-directory: scripts
 
@@ -38,13 +38,10 @@ jobs:
         run: |
           set -e
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
-            # client_payload may contain { jobId, projectId, payloadUrl, large } if Worker stored
-            # the full payload in KV/R2 for size reasons. Otherwise the full project state is inline.
             printf '%s' "$CLIENT_PAYLOAD" > raw-dispatch.json
             IS_LARGE=$(jq -r '.large // false' raw-dispatch.json)
             if [ "$IS_LARGE" = "true" ]; then
               PAYLOAD_URL=$(jq -r '.payloadUrl' raw-dispatch.json)
-              echo "Fetching large payload from $PAYLOAD_URL"
               HTTP_CODE=$(curl -sS -o render-payload.json -w "%{http_code}" "$PAYLOAD_URL")
               if [ "$HTTP_CODE" != "200" ]; then
                 echo "ERROR: payload fetch returned HTTP $HTTP_CODE"
@@ -52,11 +49,9 @@ jobs:
                 exit 1
               fi
             else
-              # Inline payload — copy as-is
               cp raw-dispatch.json render-payload.json
             fi
           else
-            # Manual workflow_dispatch — base64 decoded input
             printf '%s' "$PAYLOAD_JSON_B64" | base64 -d > render-payload.json
           fi
 
@@ -69,10 +64,11 @@ jobs:
             jobId,
             projectId,
             calloutCount: (.callouts | length),
+            totalDuration,
             hasVideo: (.global.sourceVideoUrl != null)
           }' render-payload.json
 
-      - name: Render via Remotion Lambda SDK
+      - name: Render via Remotion Lambda SDK (chunked)
         run: node render.mjs ../render-payload.json
         working-directory: scripts
         env:
@@ -82,21 +78,75 @@ jobs:
           REMOTION_FUNCTION_NAME: remotion-render-4-0-461-mem3008mb-disk5120mb-900sec
           REMOTION_SERVE_URL: https://remotionlambda-apsouth1-9dlkcsayxl.s3.ap-south-1.amazonaws.com/sites/testimonial-editor/index.html
           OUTPUT_BUCKET: darwinbox-gartner-testimonial-editor
+          FRAMES_PER_CHUNK: '9000'
 
       - name: Read render result
         id: result
         run: |
-          if [ -f "scripts/out/render-result.json" ]; then
-            MP4_URL=$(jq -r '.mp4Url // ""' scripts/out/render-result.json)
-            OUTPUT_KEY=$(jq -r '.outputKey // ""' scripts/out/render-result.json)
-            echo "mp4_url=$MP4_URL" >> "$GITHUB_OUTPUT"
-            echo "output_key=$OUTPUT_KEY" >> "$GITHUB_OUTPUT"
-            echo "Render output: $MP4_URL"
-          else
+          if [ ! -f "scripts/out/render-result.json" ]; then
+            echo "No render result file"
+            echo "needs_stitch=false" >> "$GITHUB_OUTPUT"
             echo "mp4_url=" >> "$GITHUB_OUTPUT"
             echo "output_key=" >> "$GITHUB_OUTPUT"
-            echo "No render result file found"
+            exit 1
           fi
+          cat scripts/out/render-result.json
+          NEEDS_STITCH=$(jq -r '.needsStitch // false' scripts/out/render-result.json)
+          MP4_URL=$(jq -r '.mp4Url // ""' scripts/out/render-result.json)
+          OUTPUT_KEY=$(jq -r '.outputKey // ""' scripts/out/render-result.json)
+          echo "needs_stitch=$NEEDS_STITCH" >> "$GITHUB_OUTPUT"
+          echo "mp4_url=$MP4_URL" >> "$GITHUB_OUTPUT"
+          echo "output_key=$OUTPUT_KEY" >> "$GITHUB_OUTPUT"
+
+      # ---------- STITCH STEP (only runs if chunks > 1) ----------
+      - name: Stitch parts with ffmpeg
+        if: steps.result.outputs.needs_stitch == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ap-south-1
+          BUCKET: darwinbox-gartner-testimonial-editor
+          OUTPUT_KEY: ${{ steps.result.outputs.output_key }}
+        run: |
+          set -e
+          echo "=== STITCH STEP ==="
+          mkdir -p /tmp/stitch
+          cd /tmp/stitch
+
+          # Extract part S3 keys from render-result.json
+          PARTS_JSON=$(jq -c '.parts' "$GITHUB_WORKSPACE/scripts/out/render-result.json")
+          echo "Parts: $PARTS_JSON"
+          PART_COUNT=$(echo "$PARTS_JSON" | jq 'length')
+          echo "Part count: $PART_COUNT"
+
+          # Download each part
+          rm -f concat.txt
+          for i in $(seq 0 $((PART_COUNT - 1))); do
+            S3_KEY=$(echo "$PARTS_JSON" | jq -r ".[$i].s3Key")
+            LOCAL_FILE="part-$(printf '%03d' $((i + 1))).mp4"
+            echo "Downloading s3://$BUCKET/$S3_KEY -> $LOCAL_FILE"
+            aws s3 cp "s3://$BUCKET/$S3_KEY" "$LOCAL_FILE"
+            echo "file '$LOCAL_FILE'" >> concat.txt
+          done
+
+          echo "=== concat.txt ==="
+          cat concat.txt
+          echo "=================="
+          ls -lh part-*.mp4
+
+          # ffmpeg concat (no re-encode — copy streams since all chunks share the same codec/resolution/fps)
+          echo "Running ffmpeg concat..."
+          ffmpeg -y -f concat -safe 0 -i concat.txt -c copy final.mp4
+
+          ls -lh final.mp4
+
+          # Upload to S3 (final output location — same key the editor expects)
+          echo "Uploading final.mp4 to s3://$BUCKET/$OUTPUT_KEY"
+          aws s3 cp final.mp4 "s3://$BUCKET/$OUTPUT_KEY" \
+            --content-type "video/mp4" \
+            --cache-control "max-age=3600"
+
+          echo "Final output: https://$BUCKET.s3.ap-south-1.amazonaws.com/$OUTPUT_KEY"
 
       - name: Write job status to S3
         if: always()
