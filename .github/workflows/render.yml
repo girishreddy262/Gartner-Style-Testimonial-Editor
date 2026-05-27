@@ -14,7 +14,7 @@ on:
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -24,20 +24,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: remotion/package-lock.json
-
-      - name: Install Remotion deps
-        run: npm install --no-audit --no-fund
-        working-directory: remotion
 
       - name: Install render-script deps
         run: npm install --no-audit --no-fund
         working-directory: scripts
-
-      - name: Install Chromium for Remotion
-        run: npx remotion browser ensure
-        working-directory: remotion
 
       - name: Decode payload
         id: payload
@@ -78,80 +68,27 @@ jobs:
             hasVideo: (.global.sourceVideoUrl != null)
           }' render-payload.json
 
-      # Build the inputProps file Remotion will consume.
-      # Strips legacy fields the new composition doesn't use.
-      - name: Prepare inputProps
-        run: |
-          set -e
-          jq '{
-            intro: (.intro // {}),
-            namecard: (.namecard // {}),
-            global: (.global // {}),
-            callouts: (.callouts // []),
-            totalDuration: (.totalDuration // 240)
-          }' render-payload.json > input-props.json
-          echo "=== input-props.json ==="
-          jq '{
-            introHeadline: .intro.headline,
-            namecard: .namecard.name,
-            totalDuration,
-            callouts: (.callouts | length),
-            videoUrl: .global.sourceVideoUrl
-          }' input-props.json
-
-      - name: Render the video locally with Remotion CLI
-        id: render
-        working-directory: remotion
-        run: |
-          set -e
-          OUTPUT_FILE="/tmp/output.mp4"
-          INPUT_PROPS="$GITHUB_WORKSPACE/input-props.json"
-
-          echo "=== Starting Remotion render ==="
-          echo "Output: $OUTPUT_FILE"
-          echo "Input props: $INPUT_PROPS"
-          echo "System resources:"
-          free -h
-          df -h /tmp
-          nproc
-          echo ""
-
-          # Render the full composition.
-          # --concurrency=4 uses 4 CPU cores in parallel (runners have 4)
-          # --crf=22 = balanced quality/size for h264
-          npx remotion render src/index.ts TestimonialReel "$OUTPUT_FILE" \
-            --props="$INPUT_PROPS" \
-            --concurrency=4 \
-            --codec=h264 \
-            --crf=22 \
-            --pixel-format=yuv420p \
-            --image-format=jpeg \
-            --log=info \
-            --offthreadvideo-cache-size-in-bytes=524288000
-
-          echo ""
-          echo "=== Render complete ==="
-          ls -lh "$OUTPUT_FILE"
-
-      - name: Upload final mp4 to S3
-        id: upload
-        if: success()
+      - name: Render via Remotion Lambda SDK
+        run: node render.mjs ../render-payload.json
+        working-directory: scripts
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ap-south-1
-          PROJECT_ID: ${{ steps.payload.outputs.project_id }}
-          BUCKET: darwinbox-gartner-testimonial-editor
+          REMOTION_REGION: ap-south-1
+          REMOTION_FUNCTION_NAME: remotion-render-4-0-461-mem3008mb-disk5120mb-900sec
+          REMOTION_SERVE_URL: https://remotionlambda-apsouth1-9dlkcsayxl.s3.ap-south-1.amazonaws.com/sites/testimonial-editor/index.html
+
+      - name: Read render result
+        id: result
         run: |
-          set -e
-          OUTPUT_KEY="testimonials/${PROJECT_ID}/output.mp4"
-          aws s3 cp /tmp/output.mp4 "s3://${BUCKET}/${OUTPUT_KEY}" \
-            --content-type "video/mp4" \
-            --cache-control "max-age=3600"
-          MP4_URL="https://${BUCKET}.s3.ap-south-1.amazonaws.com/${OUTPUT_KEY}"
-          echo "Uploaded: $MP4_URL"
+          if [ ! -f "scripts/out/render-result.json" ]; then
+            echo "No render result file"
+            echo "mp4_url=" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          cat scripts/out/render-result.json
+          MP4_URL=$(jq -r '.mp4Url // ""' scripts/out/render-result.json)
           echo "mp4_url=$MP4_URL" >> "$GITHUB_OUTPUT"
-          echo "output_key=$OUTPUT_KEY" >> "$GITHUB_OUTPUT"
 
       - name: Write job status to S3
         if: always()
@@ -161,8 +98,7 @@ jobs:
           AWS_DEFAULT_REGION: ap-south-1
           JOB_ID: ${{ steps.payload.outputs.job_id }}
           JOB_STATUS: ${{ job.status }}
-          MP4_URL: ${{ steps.upload.outputs.mp4_url }}
-          OUTPUT_KEY: ${{ steps.upload.outputs.output_key }}
+          MP4_URL: ${{ steps.result.outputs.mp4_url }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           BUCKET: darwinbox-gartner-testimonial-editor
         run: |
@@ -174,10 +110,9 @@ jobs:
             BODY=$(jq -n \
               --arg jobId "$JOB_ID" \
               --arg mp4Url "$MP4_URL" \
-              --arg outputKey "$OUTPUT_KEY" \
               --arg completedAt "$NOW" \
               --arg runUrl "$RUN_URL" \
-              '{status: "success", jobId: $jobId, mp4Url: $mp4Url, outputKey: $outputKey, completedAt: $completedAt, runUrl: $runUrl}')
+              '{status: "success", jobId: $jobId, mp4Url: $mp4Url, completedAt: $completedAt, runUrl: $runUrl}')
           else
             BODY=$(jq -n \
               --arg jobId "$JOB_ID" \

@@ -1,19 +1,13 @@
 #!/usr/bin/env node
 /**
- * Testimonial Video Renderer (Lambda SDK) v4 — chunk-and-stitch
+ * Testimonial render script (Lambda) — mirrors the working product-showcase render.ts
  *
- * For videos longer than ~5 minutes, Remotion Lambda's built-in stitcher
- * abort errors out (downloads all chunks + ffmpeg concat in a single
- * Lambda — runs out of disk/memory/time). Instead, we:
- *
- *   1. Split the render into N chunks of <= 5 minutes (9000 frames) each
- *   2. Call renderMediaOnLambda() for each chunk in parallel, with frameRange
- *   3. Each chunk renders + stitches independently → part-N.mp4 in S3
- *   4. GitHub Action then runs ffmpeg locally to concat parts into final mp4
- *
- * Output written to out/render-result.json with:
- *   - For single-chunk: { mp4Url } points at the chunk output directly
- *   - For multi-chunk: { parts: [...], needsStitch: true } and the Action stitches.
+ * Key learnings from product-showcase that we apply here:
+ *   - SIMPLE Lambda call — only essential options, let Remotion defaults handle the rest
+ *   - DYNAMIC framesPerLambda — scales with video length so we stay under 200 Lambda cap
+ *   - outName as plain STRING — Remotion uploads to its default bucket
+ *     (remotionlambda-apsouth1-9dlkcsayxl/renders/{renderId}/{outName})
+ *   - NO timeoutInMilliseconds, NO concurrencyPerLambda, NO audioCodec/muted/cache overrides
  */
 import { renderMediaOnLambda, getRenderProgress } from '@remotion/lambda/client';
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -22,10 +16,6 @@ import { resolve } from 'node:path';
 const REGION = process.env.REMOTION_REGION || 'ap-south-1';
 const FUNCTION_NAME = process.env.REMOTION_FUNCTION_NAME || 'remotion-render-4-0-461-mem3008mb-disk5120mb-900sec';
 const SERVE_URL = process.env.REMOTION_SERVE_URL || 'https://remotionlambda-apsouth1-9dlkcsayxl.s3.ap-south-1.amazonaws.com/sites/testimonial-editor/index.html';
-const OUTPUT_BUCKET = process.env.OUTPUT_BUCKET || 'darwinbox-gartner-testimonial-editor';
-const FPS = 30;
-const FRAMES_PER_CHUNK = parseInt(process.env.FRAMES_PER_CHUNK || '9000', 10);
-const MAX_CHUNK_RETRIES = 2;
 
 const args = process.argv.slice(2);
 if (args.length < 1) {
@@ -51,193 +41,118 @@ const inputProps = {
 
 const projectId = project.projectId || project.jobId || 'unknown';
 const jobId = project.jobId || projectId;
-const totalFrames = Math.ceil(inputProps.totalDuration * FPS);
-const numChunks = Math.ceil(totalFrames / FRAMES_PER_CHUNK);
+const totalDuration = inputProps.totalDuration;
+const fps = 30;
+const frames = Math.ceil(totalDuration * fps);
 
-function calculateFramesPerLambda(chunkFrames) {
-  const target = 60;
-  const computed = Math.ceil(chunkFrames / target);
-  return Math.max(60, Math.min(600, computed));
-}
+// Dynamic chunk sizing (copied from product-showcase render.ts).
+// Short videos (~12,000 frames) → 60 frames/lambda for max parallelism + failure isolation.
+// Long videos auto-scale chunk size so we never exceed 200 Lambda concurrent invocations.
+// 10% safety margin keeps us off the 200 ceiling.
+const MAX_LAMBDAS = 200;
+const MIN_FRAMES_PER_LAMBDA = 60;
+const minRequired = Math.ceil(frames / MAX_LAMBDAS);
+const framesPerLambda = Math.max(MIN_FRAMES_PER_LAMBDA, Math.ceil(minRequired * 1.1));
+const expectedChunks = Math.ceil(frames / framesPerLambda);
 
-console.log('Testimonial renderer (chunk-and-stitch)');
-console.log(`  jobId:           ${jobId}`);
-console.log(`  projectId:       ${projectId}`);
-console.log(`  region:          ${REGION}`);
-console.log(`  function:        ${FUNCTION_NAME}`);
-console.log(`  totalDuration:   ${inputProps.totalDuration}s`);
-console.log(`  totalFrames:     ${totalFrames}`);
-console.log(`  framesPerChunk:  ${FRAMES_PER_CHUNK}`);
-console.log(`  numChunks:       ${numChunks}`);
-console.log(`  callouts:        ${inputProps.callouts.length}`);
-console.log('');
+console.log('🎬 Testimonial Renderer (Lambda) — mirrors product-showcase config');
+console.log(`   jobId:           ${jobId}`);
+console.log(`   projectId:       ${projectId}`);
+console.log(`   totalDuration:   ${totalDuration}s`);
+console.log(`   frames:          ${frames} @ ${fps}fps`);
+console.log(`   framesPerLambda: ${framesPerLambda} (expected ${expectedChunks} chunks, max ${MAX_LAMBDAS})`);
+console.log(`   callouts:        ${inputProps.callouts.length}`);
+console.log(`   hasVideo:        ${!!inputProps.global.sourceVideoUrl}`);
+console.log(`   region:          ${REGION}`);
+console.log(`   function:        ${FUNCTION_NAME}`);
+console.log(`   serveUrl:        ${SERVE_URL}`);
 
-const chunks = [];
-for (let i = 0; i < numChunks; i++) {
-  const startFrame = i * FRAMES_PER_CHUNK;
-  const endFrame = Math.min(totalFrames - 1, (i + 1) * FRAMES_PER_CHUNK - 1);
-  const partKey = numChunks === 1
-    ? `testimonials/${projectId}/output.mp4`
-    : `testimonials/${projectId}/parts/part-${String(i + 1).padStart(3, '0')}.mp4`;
-  chunks.push({
-    index: i + 1,
-    frameRange: [startFrame, endFrame],
-    outputKey: partKey,
-    framesPerLambda: calculateFramesPerLambda(endFrame - startFrame + 1),
-  });
-}
-
-console.log('Chunk plan:');
-for (const c of chunks) {
-  console.log(`  Part ${c.index}: frames ${c.frameRange[0]}-${c.frameRange[1]} (${c.frameRange[1] - c.frameRange[0] + 1} frames, fpL=${c.framesPerLambda}) -> ${c.outputKey}`);
-}
-console.log('');
-
-console.log('Triggering all chunk renders in parallel (with retry-on-failure)...');
+console.log(`\n▶ Triggering Lambda render...`);
 const startTime = Date.now();
 
-// Render + poll a single chunk. Retries up to MAX_CHUNK_RETRIES on transient
-// stitcher failures (AbortError etc).
-async function renderChunkWithRetry(chunk) {
-  let attempt = 0;
-  let lastErr = null;
-  while (attempt <= MAX_CHUNK_RETRIES) {
-    attempt++;
-    const label = attempt === 1 ? `Part ${chunk.index}` : `Part ${chunk.index} (retry ${attempt - 1})`;
-    try {
-      console.log(`  -> triggering ${label}: frames ${chunk.frameRange[0]}-${chunk.frameRange[1]}`);
-      const triggerResult = await renderMediaOnLambda({
-        region: REGION,
-        functionName: FUNCTION_NAME,
-        serveUrl: SERVE_URL,
-        composition: 'TestimonialReel',
-        inputProps,
-        codec: 'h264',
-        imageFormat: 'jpeg',
-        crf: 22,
-        pixelFormat: 'yuv420p',
-        privacy: 'public',
-        framesPerLambda: chunk.framesPerLambda,
-        frameRange: chunk.frameRange,
-        maxRetries: 3,
-        concurrencyPerLambda: 1,
-        // The launch Lambda waits for chunks via this timeout. Set generous —
-        // Lambda's hard timeout is 15min, our function has 900s (15min) configured.
-        // Default of 30000ms causes 'stitcher' AbortError when render takes >30s.
-        timeoutInMilliseconds: 840000, // 14 minutes
-        audioCodec: 'aac',
-        muted: true,
-        offthreadVideoCacheSizeInBytes: 524288000,
-        outName: {
-          bucketName: OUTPUT_BUCKET,
-          key: chunk.outputKey,
-          s3OutputProvider: undefined,
-        },
-      });
-      console.log(`     ${label} renderId: ${triggerResult.renderId}`);
+try {
+  const result = await renderMediaOnLambda({
+    region: REGION,
+    functionName: FUNCTION_NAME,
+    serveUrl: SERVE_URL,
+    composition: 'TestimonialReel',
+    codec: 'h264',
+    crf: 18,
+    jpegQuality: 95,
+    pixelFormat: 'yuv420p',
+    inputProps,
+    framesPerLambda,
+    maxRetries: 3,
+    privacy: 'public',
+    outName: `testimonial-${jobId}.mp4`,
+  });
 
-      const pollResult = await pollChunk({
-        chunk,
-        renderId: triggerResult.renderId,
-        bucketName: triggerResult.bucketName,
-      });
-      console.log(`     ${label}: SUCCESS`);
-      return pollResult;
-    } catch (e) {
-      lastErr = e;
-      console.error(`     ${label}: FAILED — ${e.message}`);
-      if (attempt > MAX_CHUNK_RETRIES) break;
-      // Brief backoff before retrying
-      await new Promise((r) => setTimeout(r, 5000));
-    }
-  }
-  throw new Error(`Part ${chunk.index}: all ${MAX_CHUNK_RETRIES + 1} attempts failed. Last: ${lastErr?.message}`);
-}
+  console.log(`   Render ID: ${result.renderId}`);
+  console.log(`   Bucket: ${result.bucketName}`);
+  console.log(`\n▶ Waiting for render to complete...`);
 
-async function pollChunk({ chunk, renderId, bucketName }) {
+  let done = false;
+  let outputUrl = '';
+  let outputSize = 0;
   let lastPct = -1;
-  const pollInterval = 4000;
-  const maxWaitMs = 15 * 60 * 1000;
-  const startedAt = Date.now();
-  while (true) {
-    if (Date.now() - startedAt > maxWaitMs) {
-      throw new Error(`Part ${chunk.index} polling timed out`);
-    }
-    await new Promise((r) => setTimeout(r, pollInterval));
+
+  while (!done) {
+    await new Promise(r => setTimeout(r, 2000));
     const progress = await getRenderProgress({
-      renderId, bucketName,
+      renderId: result.renderId,
+      bucketName: result.bucketName,
       functionName: FUNCTION_NAME,
       region: REGION,
     });
-    const pct = Math.round((progress.overallProgress || 0) * 100);
-    if (pct !== lastPct && pct > lastPct + 4) {
-      console.log(`     Part ${chunk.index}: ${pct}%`);
-      lastPct = pct;
-    }
-    if (progress.fatalErrorEncountered) {
-      const errMsg = progress.errors?.[0]?.message || 'unknown error';
-      throw new Error(errMsg);
-    }
+
     if (progress.done) {
-      const url = progress.outputFile || `https://${OUTPUT_BUCKET}.s3.${REGION}.amazonaws.com/${chunk.outputKey}`;
-      return { chunk, url, framesRendered: progress.framesRendered };
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      outputUrl = `https://${result.bucketName}.s3.${REGION}.amazonaws.com/${progress.outKey}`;
+      outputSize = progress.outputSizeInBytes || 0;
+      console.log(`\n✅ Render complete in ${elapsed}s`);
+      console.log(`   Output: ${outputUrl}`);
+      console.log(`   Size: ${(outputSize / 1024 / 1024).toFixed(1)} MB`);
+      console.log(`   Cost: ${progress.costs?.displayCost || '$0'}`);
+      done = true;
+    } else if (progress.fatalErrorEncountered) {
+      console.error(`\n❌ Render failed`);
+      const errs = progress.errors || [];
+      errs.forEach((err, i) => {
+        console.error(`\n   Error ${i + 1}/${errs.length}:`);
+        console.error(`     Name: ${err.name || 'unknown'}`);
+        console.error(`     Type: ${err.type || 'unknown'}`);
+        console.error(`     Chunk: ${err.chunk ?? 'n/a'}`);
+        console.error(`     Frame: ${err.frame ?? 'n/a'}`);
+        console.error(`     Attempt: ${err.attempt}/${err.totalAttempts}`);
+        console.error(`     Message: ${err.message || ''}`);
+        if (err.explanation) console.error(`     Hint: ${err.explanation}`);
+      });
+      process.exit(1);
+    } else {
+      const pct = Math.round((progress.overallProgress || 0) * 100);
+      const rendered = progress.framesRendered || 0;
+      if (pct !== lastPct && pct - lastPct >= 5) {
+        console.log(`   Progress: ${pct}% (${rendered}/${frames} frames)`);
+        lastPct = pct;
+      }
     }
   }
-}
 
-// Render chunks SEQUENTIALLY with a 30-second pause between them.
-// The pause lets HTTP connections/streams from the previous render drain before
-// the next one starts — AbortError stacks frequently happen when S3 read/write
-// streams from a finished render get aborted by AWS SDK because the next render
-// is competing for the connection pool.
-const results = [];
-for (let i = 0; i < chunks.length; i++) {
-  const chunk = chunks[i];
-  if (i > 0) {
-    console.log('\n  Pausing 30s before next chunk (let connections drain)...');
-    await new Promise((r) => setTimeout(r, 30000));
-  }
-  console.log(`\n=== Rendering Part ${chunk.index}/${chunks.length} ===`);
-  const result = await renderChunkWithRetry(chunk);
-  results.push(result);
-}
-
-const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-console.log('');
-console.log(`All chunks rendered in ${elapsed}s.`);
-
-mkdirSync('out', { recursive: true });
-
-if (numChunks === 1) {
-  const result = results[0];
-  const finalUrl = `https://${OUTPUT_BUCKET}.s3.${REGION}.amazonaws.com/${result.chunk.outputKey}`;
-  writeFileSync('out/render-result.json', JSON.stringify({
-    jobId, projectId,
-    mp4Url: finalUrl,
-    outputKey: result.chunk.outputKey,
-    outputBucket: OUTPUT_BUCKET,
-    needsStitch: false,
-    elapsedSec: parseFloat(elapsed),
+  // Write result for GitHub Actions to consume
+  mkdirSync(resolve('out'), { recursive: true });
+  writeFileSync(resolve('out/render-result.json'), JSON.stringify({
+    status: 'success',
+    mp4Url: outputUrl,
+    outputSize,
+    renderId: result.renderId,
+    bucketName: result.bucketName,
+    jobId,
+    projectId,
+    elapsedMs: Date.now() - startTime,
   }, null, 2));
-  console.log(`Output: ${finalUrl}`);
-} else {
-  const parts = results.map((r) => ({
-    index: r.chunk.index,
-    s3Key: r.chunk.outputKey,
-    url: r.url,
-  }));
-  const finalKey = `testimonials/${projectId}/output.mp4`;
-  const finalUrl = `https://${OUTPUT_BUCKET}.s3.${REGION}.amazonaws.com/${finalKey}`;
-  writeFileSync('out/render-result.json', JSON.stringify({
-    jobId, projectId,
-    needsStitch: true,
-    parts,
-    outputBucket: OUTPUT_BUCKET,
-    outputKey: finalKey,
-    mp4Url: finalUrl,
-    elapsedSec: parseFloat(elapsed),
-  }, null, 2));
-  console.log(`Wrote ${parts.length} parts. Stitch step will produce: ${finalUrl}`);
+  console.log(`   Result written to: out/render-result.json`);
+} catch (e) {
+  console.error(`\n❌ Lambda render error: ${e.message}`);
+  console.error(e.stack);
+  process.exit(1);
 }
-
-process.exit(0);
