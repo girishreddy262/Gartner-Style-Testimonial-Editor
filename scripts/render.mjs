@@ -68,6 +68,25 @@ console.log('');
 
 const outputKey = `testimonials/${projectId}/output.mp4`;
 
+// Calculate framesPerLambda dynamically. Goal: keep total Lambda function count
+// under 200 (Remotion's hard limit). Each Lambda is fast (~5-15s for 30-60 frames)
+// so chunking up is fine. Formula targets ~150 chunks for headroom.
+// Examples:
+//   240s video = 7200 frames → fpL = max(60, 7200/150) = 60 → 120 lambdas ✓
+//   960s video = 28800 frames → fpL = max(60, 28800/150) = 192 → 150 lambdas ✓
+//   1800s video = 54000 frames → fpL = max(60, 54000/150) = 360 → 150 lambdas ✓
+function calculateFramesPerLambda(totalDurationSec, fps = 30) {
+  const totalFrames = totalDurationSec * fps;
+  const targetLambdas = 150;
+  const computed = Math.ceil(totalFrames / targetLambdas);
+  // Floor at 60 (so short videos aren't over-chunked) and cap at 600 (Lambda timeout safety)
+  return Math.max(60, Math.min(600, computed));
+}
+
+const framesPerLambda = calculateFramesPerLambda(inputProps.totalDuration || 240);
+console.log(`  framesPerLambda: ${framesPerLambda}  (targets ~150 Lambda invocations)`);
+console.log('');
+
 console.log('Triggering Lambda render via SDK...');
 const startTime = Date.now();
 
@@ -82,7 +101,7 @@ const { renderId, bucketName } = await renderMediaOnLambda({
   crf: 22,
   pixelFormat: 'yuv420p',
   privacy: 'public',
-  framesPerLambda: 30,
+  framesPerLambda,
   maxRetries: 3,
   concurrencyPerLambda: 1,
   outName: {

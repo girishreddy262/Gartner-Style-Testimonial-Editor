@@ -208,7 +208,22 @@
       } else if (mode === 'section' && !line.startsWith('[')) {
         sectionTitleLines.push(line);
       } else if (mode === 'slide' && current) {
-        current.titleLines.push(line);
+        // Detect bullet-prefixed lines: -, •, *, →, ◦, ▪ (common docx bullet chars)
+        // These come from docx files where the user used manual bullet characters
+        // instead of Word's list formatting (mammoth only emits <ul> for proper lists).
+        const bulletMatch = line.match(/^[\-\u2022\*\u2192\u25E6\u25AA\u2023]\s+(.+)$/);
+        if (bulletMatch) {
+          const bulletText = bulletMatch[1].trim();
+          // Also check for [meta] markers in bullet form (industry/hc/locn)
+          const meta = extractMetaItem(bulletText);
+          if (meta) {
+            current.meta.push(meta);
+          } else {
+            current.bullets.push(splitBulletTime(bulletText));
+          }
+        } else {
+          current.titleLines.push(line);
+        }
       }
     }
     flush();

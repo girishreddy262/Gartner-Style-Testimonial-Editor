@@ -25,7 +25,7 @@
   .badge { background: rgba(1,131,255,0.15); color: #66B0FF; font-size: 10px; padding: 2px 7px; border-radius: 3px; font-weight: 600; letter-spacing: 0.05em; }
 
   /* MAIN: rail + stage + inspector */
-  .main { display: grid; grid-template-columns: 240px 1fr 340px; min-height: 0; }
+  .main { display: grid; grid-template-columns: 240px minmax(0, 1fr) 340px; min-height: 0; min-width: 0; }
 
   /* LEFT RAIL */
   .rail { background: #1a1a1c; border-right: 1px solid #2a2a2e; padding: 12px 0; overflow-y: auto; }
@@ -513,7 +513,8 @@
   .icon-picker-item:hover svg { fill: #fff; }
 
   /* INSPECTOR */
-  .inspector { background: #1a1a1c; border-left: 1px solid #2a2a2e; padding: 16px; overflow-y: auto; }
+  .inspector { background: #1a1a1c; border-left: 1px solid #2a2a2e; padding: 16px; overflow-y: auto; overflow-x: hidden; min-width: 0; word-break: break-word; }
+  .inspector * { max-width: 100%; box-sizing: border-box; }
   .inspector-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #6b7280; margin-bottom: 12px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
   .inspector-section { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid #2a2a2e; }
   .inspector-section:last-child { border-bottom: 0; }
