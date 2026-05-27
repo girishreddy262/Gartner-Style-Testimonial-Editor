@@ -128,7 +128,6 @@ async function renderChunkWithRetry(chunk) {
         audioCodec: 'aac',
         muted: true,
         offthreadVideoCacheSizeInBytes: 524288000,
-        downloadBehavior: { type: 'download' },
         outName: {
           bucketName: OUTPUT_BUCKET,
           key: chunk.outputKey,
