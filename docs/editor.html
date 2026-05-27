@@ -928,6 +928,31 @@
 // =============================================================
 const FPS = 30;
 let TOTAL = 240;  // total seconds — may be updated when a project loads with a longer/shorter duration
+
+// Compute the timeline's total duration from current state.
+// Rule: total = max(intro + effective video length, last callout end) + small tail.
+//   - effective video length = videoTrimEnd - videoTrimStart (or full videoDuration if not trimmed)
+//   - falls back to 240 if no video uploaded yet and no callouts (fresh project)
+// Updates TOTAL + the timeTotal label + re-renders timeline. Idempotent.
+function recomputeTotal() {
+  const introDur = state.intro?.duration || 0;
+  const vDur = state.global.videoDuration || 0;
+  const trimStart = state.global.videoTrimStart || 0;
+  const trimEnd = state.global.videoTrimEnd > 0 ? state.global.videoTrimEnd : vDur;
+  const effectiveVideo = Math.max(0, trimEnd - trimStart);
+  let lastCalloutEnd = 0;
+  for (const c of (state.callouts || [])) {
+    if (c.end > lastCalloutEnd) lastCalloutEnd = c.end;
+  }
+  // The video starts AT intro end, so the natural end is intro + effectiveVideo
+  const naturalEnd = introDur + effectiveVideo;
+  let total = Math.max(naturalEnd, lastCalloutEnd);
+  if (total < 60) total = 240; // sane fallback for empty projects
+  TOTAL = Math.ceil(total);
+  const totalEl = document.getElementById('timeTotal');
+  if (totalEl) totalEl.textContent = fmtTime(TOTAL);
+  return TOTAL;
+}
 const PX_PER_SEC = 6;
 
 const state = {
@@ -955,6 +980,9 @@ const state = {
   global: {
     sourceVideoUrl: null,
     sourceVideoName: null,
+    videoDuration: 0,      // measured from uploaded video — seconds
+    videoTrimStart: 0,     // cut from (seconds into source video)
+    videoTrimEnd: 0,       // cut to (seconds into source video, 0 = use full duration)
     videoX_none: 0,
     videoY_none: 0,
     videoX_callout: 200,
@@ -1653,7 +1681,9 @@ function renderSceneList() {
       <div class="scene-dot global"></div>
       <div class="scene-info">
         <div class="scene-label">⚙ Source video</div>
-        <div class="scene-time">${state.global.sourceVideoName ? '✓ ' + state.global.sourceVideoName.slice(0, 22) : 'Not set'}</div>
+        <div class="scene-time">${state.global.sourceVideoName
+          ? '✓ ' + state.global.sourceVideoName.slice(0, 18) + (state.global.videoDuration ? ' · ' + fmtTime(state.global.videoDuration) : '')
+          : 'Not set'}</div>
       </div>
     </div>
     <div class="scene-item ${state.selectedSceneId === 'global_logo' ? 'active' : ''}" data-id="global_logo">
@@ -1705,8 +1735,13 @@ function renderTimeline() {
   });
 
   // Video track (always full duration after intro)
+  // Show effective trim length, not raw video duration, so cuts are reflected.
+  const trimStart = state.global.videoTrimStart || 0;
+  const trimEnd = state.global.videoTrimEnd > 0 ? state.global.videoTrimEnd : (state.global.videoDuration || 0);
+  const effLen = Math.max(0, trimEnd - trimStart);
+  const videoLabel = effLen > 0 ? `Speaker video (${fmtTime(effLen)})` : 'Speaker video';
   document.getElementById('trackVideo').innerHTML = clipHtml({
-    id: 'video', type: 'video', start: state.intro.duration, end: TOTAL, label: 'Speaker video'
+    id: 'video', type: 'video', start: state.intro.duration, end: Math.min(TOTAL, state.intro.duration + effLen || TOTAL), label: videoLabel
   });
 
   // Namecard
@@ -2026,16 +2061,34 @@ function inspectorNamecard() {
 }
 
 function inspectorGlobalVideo() {
+  const vDur = state.global.videoDuration || 0;
+  const trimStart = state.global.videoTrimStart || 0;
+  const trimEnd = state.global.videoTrimEnd > 0 ? state.global.videoTrimEnd : vDur;
+  const effLen = Math.max(0, trimEnd - trimStart);
   return `
     <div class="inspector-title">Source video <span class="badge">GLOBAL</span></div>
     <div class="inspector-section">
       <div class="helper" style="margin-bottom:10px">Set once, used in all scenes.</div>
       <div class="upload-zone ${state.global.sourceVideoUrl ? 'has-file' : ''}" id="zoneSourceVideo">
         ${state.global.sourceVideoUrl
-          ? '<span class="file-name">✓ ' + escapeHtml(state.global.sourceVideoName) + '</span><button class="file-remove" id="removeSourceVideo">✕</button>'
+          ? '<span class="file-name">✓ ' + escapeHtml(state.global.sourceVideoName || 'video') + (vDur ? ' · ' + fmtTime(vDur) : '') + '</span><button class="file-remove" id="removeSourceVideo">✕</button>'
           : '📁 Upload speaker video'}
       </div>
     </div>
+    ${vDur > 0 ? `
+    <div class="inspector-section">
+      <div class="inspector-title">Trim / Cut</div>
+      <div class="helper" style="margin-bottom:10px">Cut the source. Output uses only the trimmed range.</div>
+      <div class="field-row">
+        <div class="field"><div class="field-label">Trim start (s)</div>
+          <input class="field-input" data-bind="global.videoTrimStart" type="number" step="0.1" min="0" max="${vDur.toFixed(1)}" value="${trimStart.toFixed(1)}"/></div>
+        <div class="field"><div class="field-label">Trim end (s)</div>
+          <input class="field-input" data-bind="global.videoTrimEnd" type="number" step="0.1" min="0" max="${vDur.toFixed(1)}" value="${trimEnd.toFixed(1)}"/></div>
+      </div>
+      <div class="helper" style="margin-top:6px">After trim: <strong>${fmtTime(effLen)}</strong> &nbsp;·&nbsp; full: ${fmtTime(vDur)}</div>
+      <div style="margin-top:8px"><button id="resetTrim" style="background:transparent;color:#94a3b8;border:1px dashed #383840;border-radius:5px;padding:6px 12px;cursor:pointer;font:inherit;font-size:11px;">Reset trim</button></div>
+    </div>
+    ` : ''}
     <div class="inspector-section">
       <div class="inspector-title">Framing</div>
       <div class="field">
@@ -2401,6 +2454,20 @@ function bindInspector() {
         const cid = path.split('.')[1];
         if (callout._currentId === cid) callout._currentId = '__force_replay__';
       }
+      // Trim fields & intro.duration affect total timeline length — recompute.
+      if (path === 'global.videoTrimStart' || path === 'global.videoTrimEnd' || path === 'intro.duration') {
+        // Validate trim bounds
+        const vDur = state.global.videoDuration || 0;
+        if (vDur > 0) {
+          if (state.global.videoTrimStart < 0) state.global.videoTrimStart = 0;
+          if (state.global.videoTrimStart > vDur) state.global.videoTrimStart = vDur;
+          if (state.global.videoTrimEnd > vDur) state.global.videoTrimEnd = vDur;
+          if (state.global.videoTrimEnd <= state.global.videoTrimStart) state.global.videoTrimEnd = vDur;
+        }
+        recomputeTotal();
+        // Re-seek video to the new trim start if currently before intro end
+        syncVideoSeek();
+      }
       renderCanvas();
       renderTimeline();
       renderSceneList();
@@ -2487,6 +2554,22 @@ function bindInspector() {
       v.id = 'videoImg';
       v.src = url; v.loop = true; v.muted = false; v.playsInline = true; v.preload = "auto"; v.crossOrigin = "anonymous";
       v.style.cssText = 'display:block;width:100%;height:100%;object-fit:cover;object-position:center;';
+      // Read duration when metadata loads, then auto-set videoTrimEnd + recompute total
+      v.addEventListener('loadedmetadata', () => {
+        if (v.duration && isFinite(v.duration)) {
+          state.global.videoDuration = v.duration;
+          // Reset trim only if not already set (fresh upload — fill the range)
+          if (!state.global.videoTrimEnd || state.global.videoTrimEnd > v.duration) {
+            state.global.videoTrimEnd = v.duration;
+          }
+          if (state.global.videoTrimStart >= v.duration) {
+            state.global.videoTrimStart = 0;
+          }
+          recomputeTotal();
+          renderAll();
+          saveProject();
+        }
+      }, { once: true });
       old.replaceWith(v);
     } else {
       old.src = url;
@@ -2503,9 +2586,28 @@ function bindInspector() {
   const removeIntroPortrait = document.getElementById('removeIntroPortrait');
   if (removeIntroPortrait) removeIntroPortrait.onclick = (e) => { e.stopPropagation(); state.intro.portraitUrl = null; renderAll(); };
   const removeSrc = document.getElementById('removeSourceVideo');
-  if (removeSrc) removeSrc.onclick = (e) => { e.stopPropagation(); state.global.sourceVideoUrl = null; state.global.sourceVideoName = null; renderAll(); };
+  if (removeSrc) removeSrc.onclick = (e) => {
+    e.stopPropagation();
+    state.global.sourceVideoUrl = null;
+    state.global.sourceVideoName = null;
+    state.global.videoDuration = 0;
+    state.global.videoTrimStart = 0;
+    state.global.videoTrimEnd = 0;
+    recomputeTotal();
+    renderAll();
+  };
   const removeLogo = document.getElementById('removeClientLogo');
   if (removeLogo) removeLogo.onclick = (e) => { e.stopPropagation(); state.global.clientLogoUrl = null; state.global.clientLogoName = null; renderAll(); };
+
+  // Reset trim button — sets trim back to full video duration
+  const resetTrim = document.getElementById('resetTrim');
+  if (resetTrim) resetTrim.onclick = (e) => {
+    e.stopPropagation();
+    state.global.videoTrimStart = 0;
+    state.global.videoTrimEnd = state.global.videoDuration || 0;
+    recomputeTotal();
+    renderAll();
+  };
 }
 
 function setByPath(path, val) {
@@ -2679,7 +2781,9 @@ function syncVideoPlayback() {
   const v = getVideoEl();
   if (!v) return;
   if (state.playing && state.currentTime >= state.intro.duration) {
-    v.currentTime = Math.max(0, state.currentTime - state.intro.duration);
+    // Map timeline time → source video time, adding the trim-start offset
+    const trimStart = state.global.videoTrimStart || 0;
+    v.currentTime = Math.max(0, trimStart + (state.currentTime - state.intro.duration));
     v.play().catch(() => {});
   } else {
     v.pause();
@@ -2697,9 +2801,10 @@ function syncVideoSeek() {
   const v = getVideoEl();
   if (!v) return;
   if (state.currentTime >= state.intro.duration) {
-    v.currentTime = state.currentTime - state.intro.duration;
+    const trimStart = state.global.videoTrimStart || 0;
+    v.currentTime = trimStart + (state.currentTime - state.intro.duration);
   } else {
-    v.currentTime = 0;
+    v.currentTime = state.global.videoTrimStart || 0;
     v.pause();
   }
 }
@@ -2915,11 +3020,13 @@ function hydrateFromProject(p) {
   if (p.global) Object.assign(state.global, p.global);
   if (Array.isArray(p.callouts)) state.callouts = p.callouts;
 
-  // Update total duration to match the project (so a 15-minute video gets a 15-minute timeline).
-  // Fall back to current TOTAL if not provided.
-  if (typeof p.totalDuration === 'number' && p.totalDuration > 0) {
+  // Recompute TOTAL from current state (uses videoDuration + trim + callouts).
+  // If the project explicitly set a totalDuration AND we have no video yet,
+  // use that as a hint (e.g. from docx upload), otherwise compute fresh.
+  if (state.global.videoDuration > 0 || (state.callouts && state.callouts.length > 0)) {
+    recomputeTotal();
+  } else if (typeof p.totalDuration === 'number' && p.totalDuration > 0) {
     TOTAL = Math.ceil(p.totalDuration);
-    // Update displayed total in timeline UI
     const totalEl = document.getElementById('timeTotal');
     if (totalEl) totalEl.textContent = fmtTime(TOTAL);
   }
@@ -2934,11 +3041,13 @@ function hydrateFromProject(p) {
     // Replace video element src — original is an <img>, swap for <video>
     const old = document.getElementById('videoImg');
     if (!old) return;
+    let v;
     if (old.tagName === 'VIDEO') {
-      old.src = url;
-      old.load();
+      v = old;
+      v.src = url;
+      v.load();
     } else {
-      const v = document.createElement('video');
+      v = document.createElement('video');
       v.id = 'videoImg';
       v.src = url;
       v.loop = true;
@@ -2949,8 +3058,22 @@ function hydrateFromProject(p) {
       v.style.cssText = 'display:block;width:100%;height:100%;object-fit:cover;object-position:center;';
       old.replaceWith(v);
     }
+    // Read duration from S3 video — needed for trim defaults + TOTAL recompute
+    v.addEventListener('loadedmetadata', () => {
+      if (v.duration && isFinite(v.duration)) {
+        state.global.videoDuration = v.duration;
+        if (!state.global.videoTrimEnd || state.global.videoTrimEnd > v.duration) {
+          state.global.videoTrimEnd = v.duration;
+        }
+        recomputeTotal();
+        renderAll();
+      }
+    }, { once: true });
     renderAll();
-  }).catch(e => console.warn('Could not load video playback URL:', e));
+  }).catch(e => {
+    console.warn('Could not load video playback URL:', e);
+    setStatus('Could not load video (check console)', 'error');
+  });
 
   renderAll();
 }

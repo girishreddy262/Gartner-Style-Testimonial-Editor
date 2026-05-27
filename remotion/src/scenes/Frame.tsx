@@ -1,5 +1,5 @@
 import React from 'react';
-import { Video, OffthreadVideo } from 'remotion';
+import { Video, OffthreadVideo, useVideoConfig } from 'remotion';
 import { DARWINBOX_LOGO_URL } from '../lib/assets';
 
 // ============================================================
@@ -29,6 +29,8 @@ interface FrameProps {
     videoY_none: number;
     videoX_callout: number;
     videoScale: number;
+    videoTrimStart?: number; // seconds — start of source video to play from
+    videoTrimEnd?: number;   // seconds — end of source video (0 or unset = play to end)
     clientLogoUrl: string | null;
   };
   calloutActive: boolean;
@@ -39,6 +41,7 @@ export const Frame: React.FC<FrameProps> = ({
   global,
   calloutActive,
 }) => {
+  const { fps } = useVideoConfig();
   // Video mask dimensions
   const maskLeft = calloutActive ? 620 : 60;
   const maskTop = 60;
@@ -91,6 +94,12 @@ export const Frame: React.FC<FrameProps> = ({
           >
             <OffthreadVideo
               src={videoUrl}
+              startFrom={Math.round((global.videoTrimStart || 0) * fps)}
+              endAt={
+                global.videoTrimEnd && global.videoTrimEnd > 0
+                  ? Math.round(global.videoTrimEnd * fps)
+                  : undefined
+              }
               style={{
                 display: 'block',
                 width: '100%',
