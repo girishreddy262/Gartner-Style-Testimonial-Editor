@@ -10,7 +10,7 @@
   html, body { height: 100%; background: #151516; color: #EDF6FF; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px; }
   body { user-select: none; }
   input, textarea, [contenteditable] { user-select: text; }
-  .app { display: grid; grid-template-rows: 56px 1fr 230px; height: 100vh; }
+  .app { display: grid; grid-template-rows: 56px 1fr 230px; height: 100vh; width: 100vw; max-width: 100vw; overflow: hidden; }
 
   /* TOPBAR */
   .topbar { background: #1f1f22; border-bottom: 1px solid #2a2a2e; padding: 0 20px; display: flex; align-items: center; gap: 12px; }
@@ -539,8 +539,8 @@
   .upload-zone.has-file .file-remove:hover { background: rgba(252,106,107,0.1); }
 
   /* BOTTOM */
-  .bottom { background: #1a1a1c; border-top: 1px solid #2a2a2e; }
-  .player-controls { display: flex; align-items: center; padding: 10px 16px 6px; gap: 10px; }
+  .bottom { background: #1a1a1c; border-top: 1px solid #2a2a2e; min-width: 0; overflow: hidden; }
+  .player-controls { display: flex; align-items: center; padding: 10px 16px 6px; gap: 10px; min-width: 0; }
   .control-btn { width: 32px; height: 32px; border-radius: 16px; border: 1px solid #383840; background: #232327; color: #fff; cursor: pointer; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; }
   .control-btn:hover { background: #2e2e32; }
   .control-btn.play { background: #0183FF; border-color: #0183FF; width: 38px; height: 38px; border-radius: 19px; font-size: 14px; }
