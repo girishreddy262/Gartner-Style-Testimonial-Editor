@@ -79,7 +79,7 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           REMOTION_REGION: ap-south-1
-          REMOTION_FUNCTION_NAME: remotion-render-4-0-461-mem3008mb-disk5120mb-600sec
+          REMOTION_FUNCTION_NAME: remotion-render-4-0-461-mem3008mb-disk5120mb-900sec
           REMOTION_SERVE_URL: https://remotionlambda-apsouth1-9dlkcsayxl.s3.ap-south-1.amazonaws.com/sites/testimonial-editor/index.html
           OUTPUT_BUCKET: darwinbox-gartner-testimonial-editor
 
