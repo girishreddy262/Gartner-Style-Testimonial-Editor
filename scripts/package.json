@@ -1,0 +1,10 @@
+{
+  "name": "testimonial-render-script",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@remotion/lambda": "4.0.461",
+    "@remotion/lambda-client": "4.0.461"
+  }
+}
