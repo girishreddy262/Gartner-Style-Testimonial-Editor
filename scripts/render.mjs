@@ -24,7 +24,8 @@ const FUNCTION_NAME = process.env.REMOTION_FUNCTION_NAME || 'remotion-render-4-0
 const SERVE_URL = process.env.REMOTION_SERVE_URL || 'https://remotionlambda-apsouth1-9dlkcsayxl.s3.ap-south-1.amazonaws.com/sites/testimonial-editor/index.html';
 const OUTPUT_BUCKET = process.env.OUTPUT_BUCKET || 'darwinbox-gartner-testimonial-editor';
 const FPS = 30;
-const FRAMES_PER_CHUNK = parseInt(process.env.FRAMES_PER_CHUNK || '9000', 10);
+const FRAMES_PER_CHUNK = parseInt(process.env.FRAMES_PER_CHUNK || '4500', 10);
+const MAX_CHUNK_RETRIES = 2;
 
 const args = process.argv.slice(2);
 if (args.length < 1) {
@@ -92,45 +93,68 @@ for (const c of chunks) {
 }
 console.log('');
 
-console.log('Triggering all chunk renders in parallel...');
+console.log('Triggering all chunk renders in parallel (with retry-on-failure)...');
 const startTime = Date.now();
-const renderHandles = await Promise.all(chunks.map(async (chunk) => {
-  console.log(`  -> triggering Part ${chunk.index}...`);
-  const result = await renderMediaOnLambda({
-    region: REGION,
-    functionName: FUNCTION_NAME,
-    serveUrl: SERVE_URL,
-    composition: 'TestimonialReel',
-    inputProps,
-    codec: 'h264',
-    imageFormat: 'jpeg',
-    crf: 22,
-    pixelFormat: 'yuv420p',
-    privacy: 'public',
-    framesPerLambda: chunk.framesPerLambda,
-    frameRange: chunk.frameRange,
-    maxRetries: 3,
-    concurrencyPerLambda: 1,
-    outName: {
-      bucketName: OUTPUT_BUCKET,
-      key: chunk.outputKey,
-      s3OutputProvider: undefined,
-    },
-  });
-  console.log(`    Part ${chunk.index} renderId: ${result.renderId}`);
-  return { chunk, renderId: result.renderId, bucketName: result.bucketName };
-}));
-console.log('');
 
-async function pollChunk(handle) {
-  const { chunk, renderId, bucketName } = handle;
+// Render + poll a single chunk. Retries up to MAX_CHUNK_RETRIES on transient
+// stitcher failures (AbortError etc).
+async function renderChunkWithRetry(chunk) {
+  let attempt = 0;
+  let lastErr = null;
+  while (attempt <= MAX_CHUNK_RETRIES) {
+    attempt++;
+    const label = attempt === 1 ? `Part ${chunk.index}` : `Part ${chunk.index} (retry ${attempt - 1})`;
+    try {
+      console.log(`  -> triggering ${label}: frames ${chunk.frameRange[0]}-${chunk.frameRange[1]}`);
+      const triggerResult = await renderMediaOnLambda({
+        region: REGION,
+        functionName: FUNCTION_NAME,
+        serveUrl: SERVE_URL,
+        composition: 'TestimonialReel',
+        inputProps,
+        codec: 'h264',
+        imageFormat: 'jpeg',
+        crf: 22,
+        pixelFormat: 'yuv420p',
+        privacy: 'public',
+        framesPerLambda: chunk.framesPerLambda,
+        frameRange: chunk.frameRange,
+        maxRetries: 3,
+        concurrencyPerLambda: 1,
+        outName: {
+          bucketName: OUTPUT_BUCKET,
+          key: chunk.outputKey,
+          s3OutputProvider: undefined,
+        },
+      });
+      console.log(`     ${label} renderId: ${triggerResult.renderId}`);
+
+      const pollResult = await pollChunk({
+        chunk,
+        renderId: triggerResult.renderId,
+        bucketName: triggerResult.bucketName,
+      });
+      console.log(`     ${label}: SUCCESS`);
+      return pollResult;
+    } catch (e) {
+      lastErr = e;
+      console.error(`     ${label}: FAILED — ${e.message}`);
+      if (attempt > MAX_CHUNK_RETRIES) break;
+      // Brief backoff before retrying
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  }
+  throw new Error(`Part ${chunk.index}: all ${MAX_CHUNK_RETRIES + 1} attempts failed. Last: ${lastErr?.message}`);
+}
+
+async function pollChunk({ chunk, renderId, bucketName }) {
   let lastPct = -1;
   const pollInterval = 4000;
   const maxWaitMs = 15 * 60 * 1000;
   const startedAt = Date.now();
   while (true) {
     if (Date.now() - startedAt > maxWaitMs) {
-      throw new Error(`Part ${chunk.index} timed out after ${maxWaitMs / 1000}s`);
+      throw new Error(`Part ${chunk.index} polling timed out`);
     }
     await new Promise((r) => setTimeout(r, pollInterval));
     const progress = await getRenderProgress({
@@ -140,23 +164,21 @@ async function pollChunk(handle) {
     });
     const pct = Math.round((progress.overallProgress || 0) * 100);
     if (pct !== lastPct && pct > lastPct + 4) {
-      console.log(`  Part ${chunk.index}: ${pct}%`);
+      console.log(`     Part ${chunk.index}: ${pct}%`);
       lastPct = pct;
     }
     if (progress.fatalErrorEncountered) {
       const errMsg = progress.errors?.[0]?.message || 'unknown error';
-      throw new Error(`Part ${chunk.index} fatal: ${errMsg}`);
+      throw new Error(errMsg);
     }
     if (progress.done) {
       const url = progress.outputFile || `https://${OUTPUT_BUCKET}.s3.${REGION}.amazonaws.com/${chunk.outputKey}`;
-      console.log(`  Part ${chunk.index}: DONE -> ${url}`);
       return { chunk, url, framesRendered: progress.framesRendered };
     }
   }
 }
 
-console.log('Polling all chunks (parallel)...');
-const results = await Promise.all(renderHandles.map(pollChunk));
+const results = await Promise.all(chunks.map(renderChunkWithRetry));
 
 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 console.log('');
