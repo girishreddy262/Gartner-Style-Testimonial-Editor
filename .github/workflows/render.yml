@@ -126,7 +126,6 @@ jobs:
             --crf=22 \
             --pixel-format=yuv420p \
             --image-format=jpeg \
-            --muted \
             --log=info \
             --offthreadvideo-cache-size-in-bytes=524288000
 

@@ -3,6 +3,7 @@ import {
   AbsoluteFill,
   useCurrentFrame,
   useVideoConfig,
+  Sequence,
 } from 'remotion';
 import { Intro } from './scenes/Intro';
 import { Frame } from './scenes/Frame';
@@ -14,8 +15,12 @@ import { SATOSHI_FONT_CSS } from './lib/fonts';
 // TESTIMONIAL REEL — top-level composition.
 // ============================================================
 //
-// All assets are embedded — no network calls at render time except for the
-// source video (which Lambda fetches from S3 via presigned URL).
+// Structure:
+//   - Intro (0 .. introDuration + 0.3s overlap)
+//   - Speaker video Frame wrapped in <Sequence from={introFrames}> so the
+//     source video plays from its t=0 starting when the intro ends.
+//   - Namecard overlay (3s after intro)
+//   - Callouts overlay (based on each callout's start/end)
 
 interface Props {
   intro: any;
@@ -31,9 +36,10 @@ export const TestimonialReel: React.FC<Props> = ({
   callouts,
 }) => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
+  const { fps, durationInFrames } = useVideoConfig();
   const t = frame / fps;
   const introDuration = intro?.duration || 5;
+  const introFrames = Math.round(introDuration * fps);
   const inIntro = t < introDuration;
 
   // Find the active callout (if any)
@@ -61,26 +67,32 @@ export const TestimonialReel: React.FC<Props> = ({
           />
         )}
 
-        {/* MAIN STATE (after intro) */}
-        {!inIntro && (
-          <>
-            <Frame
-              videoUrl={global?.sourceVideoUrl || null}
-              global={global || {}}
-              calloutActive={!!activeCallout}
-            />
-            {namecard && (
-              <Namecard
-                name={namecard.name}
-                role={namecard.role}
-                start={namecard.start}
-                end={namecard.end}
-                t={t}
-              />
-            )}
-            {activeCallout && <Callout callout={activeCallout} t={t} />}
-          </>
+        {/* SPEAKER VIDEO in a Sequence — starts playing at intro end.
+            Wrapping in <Sequence from={introFrames}> means: the inner content
+            sees time as t=0 when the composition is at t=introDuration. So
+            OffthreadVideo plays the source from its actual start (t=0) at the
+            moment the intro ends, instead of jumping into mid-source. */}
+        <Sequence from={introFrames} durationInFrames={durationInFrames - introFrames}>
+          <Frame
+            videoUrl={global?.sourceVideoUrl || null}
+            global={global || {}}
+            calloutActive={!!activeCallout}
+          />
+        </Sequence>
+
+        {/* NAMECARD overlay (uses outer composition time, not Sequence time) */}
+        {!inIntro && namecard && (
+          <Namecard
+            name={namecard.name}
+            role={namecard.role}
+            start={namecard.start}
+            end={namecard.end}
+            t={t}
+          />
         )}
+
+        {/* CALLOUT overlay (uses outer composition time) */}
+        {!inIntro && activeCallout && <Callout callout={activeCallout} t={t} />}
       </AbsoluteFill>
     </>
   );
