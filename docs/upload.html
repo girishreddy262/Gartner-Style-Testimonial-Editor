@@ -202,18 +202,155 @@
     document.getElementById('progressPct').textContent = pct + '%';
   }
 
+  // ============================================================
+  // CONVERTER: parsed (old shape) → editor state (new shape)
+  // ============================================================
+  // The parser outputs the old project format. The new editor reads a different
+  // shape. Convert here so the saved project state matches what editor.html expects.
+
+  const ICON_KIND_MAP = {
+    industry: 'industry',
+    people: 'employees',
+    hc: 'employees',
+    location: 'location',
+    locn: 'location',
+  };
+
+  // Pick a sensible default icon for title_only_dark callouts based on the title text.
+  function pickIconForTitle(title) {
+    const t = (title || '').toLowerCase();
+    if (/global|world|country|countries|geo/.test(t)) return 'globe';
+    if (/team|people|employee|workforce/.test(t)) return 'users';
+    if (/performance|growth|metric|kpi|chart|data/.test(t)) return 'chart';
+    if (/partner|collaborat|together/.test(t)) return 'handshake';
+    if (/secur|protect|safe/.test(t)) return 'shield';
+    if (/build|launch|deploy|implement/.test(t)) return 'rocket';
+    if (/process|workflow|system/.test(t)) return 'cog';
+    return 'star';
+  }
+
+  function convertParsedToEditorState(parsed, videoFileName) {
+    const scenes = parsed.scenes || [];
+
+    // ── INTRO ───────────────────────────────────────────────────────────
+    // Pull meta icons from FIRST meta_intro scene if present. Otherwise leave blank.
+    const firstMetaScene = scenes.find(s => s.layout === 'meta_intro');
+    const metaItems = firstMetaScene ? (firstMetaScene.props.items || []) : [];
+    const findMetaText = (iconType) => {
+      const m = metaItems.find(it => ICON_KIND_MAP[it.icon] === iconType);
+      return m ? m.text : '';
+    };
+
+    const intro = {
+      duration: 5.0,
+      headline: parsed.introHeadline || '',
+      icon1: findMetaText('industry'),   // industry text
+      icon2: findMetaText('employees'),  // employees text
+      icon3: findMetaText('location'),   // location text
+      portraitUrl: null,
+    };
+
+    // ── NAMECARD ────────────────────────────────────────────────────────
+    // Show from t=5 (after intro) until t=8 (3 seconds), or until first callout starts.
+    const firstCalloutStart = scenes.length > 0 ? Math.min(...scenes.map(s => s.start)) : 240;
+    const namecardEnd = Math.min(8, Math.max(8, firstCalloutStart));
+    const namecard = {
+      name: parsed.speaker?.name || '',
+      role: parsed.speaker?.designation || '',
+      start: 5,
+      end: namecardEnd,
+    };
+
+    // ── CALLOUTS ────────────────────────────────────────────────────────
+    const callouts = scenes.map((s, idx) => {
+      const id = 'c' + (idx + 1);
+      const layout = s.layout;
+      const start = s.start;
+      const end = s.end;
+      const bulletTimings = s.bulletTimings || [];
+
+      if (layout === 'meta_intro') {
+        return {
+          id, layout, start, end,
+          content: {},
+          items: (s.props.items || []).map((it, i) => ({
+            iconKind: ICON_KIND_MAP[it.icon] || 'industry',
+            text: it.text || '',
+            time: bulletTimings[i] != null ? bulletTimings[i] : start,
+          })),
+        };
+      }
+
+      if (layout === 'title_only_dark') {
+        return {
+          id, layout, start, end,
+          content: {},
+          items: [{
+            icon: pickIconForTitle(s.props.title),
+            title: s.props.title || '',
+            time: start,
+          }],
+        };
+      }
+
+      // bullets_with_inline_metric, dual_section_bullets, country_bullets, etc.
+      // Default: convert to bullets_with_inline_metric shape.
+      const bullets = s.props.bullets || [];
+      return {
+        id, layout: layout || 'bullets_with_inline_metric', start, end,
+        content: { title: s.props.title || '' },
+        items: bullets.map((b, i) => ({
+          text: b.text || '',
+          bold: '',
+          time: bulletTimings[i] != null ? bulletTimings[i] : start + i * 3,
+        })),
+      };
+    });
+
+    // ── GLOBAL ──────────────────────────────────────────────────────────
+    const global = {
+      sourceVideoUrl: null,        // hydrated from S3 later via /video-url
+      sourceVideoName: videoFileName || null,
+      videoX_none: 0,
+      videoY_none: 0,
+      videoX_callout: 200,
+      videoScale: 1.0,
+      clientLogoUrl: null,
+      clientLogoName: null,
+    };
+
+    // ── TOTAL DURATION ──────────────────────────────────────────────────
+    // Use the latest scene end + small tail, OR fall back to 240s.
+    const latestEnd = scenes.length > 0 ? Math.max(...scenes.map(s => s.end)) : 0;
+    const totalDuration = Math.max(240, Math.ceil(latestEnd + 10));
+
+    return { intro, namecard, callouts, global, totalDuration };
+  }
+
   document.getElementById('submitBtn').onclick = async () => {
     if (!state.videoFile || !state.docxFile || !state.parsed) return;
     document.getElementById('submitBtn').disabled = true;
     document.getElementById('submitBtn').textContent = 'Creating…';
 
     try {
-      // 1. Create the project (gets a projectId we can scope uploads to)
+      // Convert parsed DOCX to the new editor state shape
+      const editorState = convertParsedToEditorState(state.parsed, state.videoFile.name);
+
+      // 1. Create the project — payload uses the new editor shape.
+      // Keep `scenes` + `introHeadline` + `speaker` for backwards compat with anything
+      // still reading them; new editor reads intro/namecard/callouts/global/totalDuration.
       setProgress('Creating project…', 0);
       const project = await API.createProject({
         videoFileName: state.videoFile.name,
         videoSize: state.videoFile.size,
         docxFileName: state.docxFile.name,
+        // New editor fields:
+        intro: editorState.intro,
+        namecard: editorState.namecard,
+        callouts: editorState.callouts,
+        global: editorState.global,
+        totalDuration: editorState.totalDuration,
+        // Backwards-compat fields (parser output; ignored by new editor):
         speaker: state.parsed.speaker,
         introHeadline: state.parsed.introHeadline,
         scenes: state.parsed.scenes,
@@ -224,10 +361,6 @@
           tag: '',
           portraitPath: null,
           logoPath: null
-        },
-        namecard: {
-          name: state.parsed.speaker.name || '',
-          designation: state.parsed.speaker.designation || ''
         },
         frameSettings: {
           full:   { x: 90,  y: 61,  w: 1766, h: 967 },

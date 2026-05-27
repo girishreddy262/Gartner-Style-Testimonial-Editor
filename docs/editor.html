@@ -926,7 +926,7 @@
 // STATE
 // =============================================================
 const FPS = 30;
-const TOTAL = 240;  // total seconds
+let TOTAL = 240;  // total seconds — may be updated when a project loads with a longer/shorter duration
 const PX_PER_SEC = 6;
 
 const state = {
@@ -2914,6 +2914,15 @@ function hydrateFromProject(p) {
   if (p.global) Object.assign(state.global, p.global);
   if (Array.isArray(p.callouts)) state.callouts = p.callouts;
 
+  // Update total duration to match the project (so a 15-minute video gets a 15-minute timeline).
+  // Fall back to current TOTAL if not provided.
+  if (typeof p.totalDuration === 'number' && p.totalDuration > 0) {
+    TOTAL = Math.ceil(p.totalDuration);
+    // Update displayed total in timeline UI
+    const totalEl = document.getElementById('timeTotal');
+    if (totalEl) totalEl.textContent = fmtTime(TOTAL);
+  }
+
   // Always try to fetch the playback URL for the video.
   // The Worker's /video-url endpoint returns null if no video is associated with the project,
   // so it's safe to call unconditionally. We don't gate on a flag in the project state
@@ -2964,7 +2973,9 @@ async function loadProjectFromServer() {
   try {
     const res = await fetch(`${API_BASE}/api/projects/${currentProjectId}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const project = await res.json();
+    const body = await res.json();
+    // Worker returns { project: {...} } — unwrap. Fall back to body itself if older Worker.
+    const project = body.project || body;
     hydrateFromProject(project);
     setStatus('Loaded');
     setTimeout(() => setStatus(''), 1500);
