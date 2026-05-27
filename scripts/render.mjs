@@ -82,8 +82,9 @@ const { renderId, bucketName } = await renderMediaOnLambda({
   crf: 22,
   pixelFormat: 'yuv420p',
   privacy: 'public',
-  framesPerLambda: 60,
-  maxRetries: 2,
+  framesPerLambda: 30,
+  maxRetries: 3,
+  concurrencyPerLambda: 1,
   outName: {
     bucketName: OUTPUT_BUCKET,
     key: outputKey,

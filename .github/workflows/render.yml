@@ -134,7 +134,6 @@ jobs:
           echo "$BODY" | tee /tmp/status.json
           aws s3 cp /tmp/status.json "s3://${BUCKET}/${KEY}" \
             --content-type "application/json" \
-            --cache-control "no-cache, no-store" \
-            --acl public-read
+            --cache-control "no-cache, no-store"
 
           echo "Status: https://${BUCKET}.s3.ap-south-1.amazonaws.com/${KEY}"
