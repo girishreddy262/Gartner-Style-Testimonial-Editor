@@ -1,5 +1,5 @@
 import React from 'react';
-import { Video, OffthreadVideo, useVideoConfig } from 'remotion';
+import { Video, OffthreadVideo, Series, useVideoConfig } from 'remotion';
 import { DARWINBOX_LOGO_URL } from '../lib/assets';
 
 // ============================================================
@@ -31,6 +31,7 @@ interface FrameProps {
     videoScale: number;
     videoTrimStart?: number; // seconds — start of source video to play from
     videoTrimEnd?: number;   // seconds — end of source video (0 or unset = play to end)
+    videoSegments?: { id?: string; from: number; to: number }[]; // multi-clip kept pieces
     clientLogoUrl: string | null;
   };
   calloutActive: boolean;
@@ -101,22 +102,55 @@ export const Frame: React.FC<FrameProps> = ({
               transformOrigin: 'center center',
             }}
           >
-            <OffthreadVideo
-              src={videoUrl}
-              startFrom={Math.round((global.videoTrimStart || 0) * fps)}
-              endAt={
-                global.videoTrimEnd && global.videoTrimEnd > 0
-                  ? Math.round(global.videoTrimEnd * fps)
-                  : undefined
-              }
-              style={{
-                display: 'block',
+            {(() => {
+              // Build the segment list. Multi-clip: render each kept piece as a
+              // Series.Sequence with its own startFrom/endAt. Falls back to legacy
+              // single trim when no segments are present.
+              const segs =
+                Array.isArray(global.videoSegments) && global.videoSegments.length
+                  ? global.videoSegments
+                  : [{
+                      from: global.videoTrimStart || 0,
+                      to: global.videoTrimEnd && global.videoTrimEnd > 0 ? global.videoTrimEnd : 0,
+                    }];
+              const videoStyle = {
+                display: 'block' as const,
                 width: '100%',
                 height: '100%',
-                objectFit: 'cover',
-                objectPosition: 'center',
-              }}
-            />
+                objectFit: 'cover' as const,
+                objectPosition: 'center' as const,
+              };
+              // Single segment (or legacy) → plain OffthreadVideo (no Series overhead)
+              if (segs.length === 1) {
+                const s = segs[0];
+                return (
+                  <OffthreadVideo
+                    src={videoUrl}
+                    startFrom={Math.round((s.from || 0) * fps)}
+                    endAt={s.to && s.to > 0 ? Math.round(s.to * fps) : undefined}
+                    style={videoStyle}
+                  />
+                );
+              }
+              // Multi-clip → Series stitches segments back-to-back.
+              return (
+                <Series>
+                  {segs.map((s, i) => {
+                    const lenFrames = Math.max(1, Math.round((s.to - s.from) * fps));
+                    return (
+                      <Series.Sequence key={s.id || i} durationInFrames={lenFrames}>
+                        <OffthreadVideo
+                          src={videoUrl}
+                          startFrom={Math.round(s.from * fps)}
+                          endAt={Math.round(s.to * fps)}
+                          style={videoStyle}
+                        />
+                      </Series.Sequence>
+                    );
+                  })}
+                </Series>
+              );
+            })()}
           </div>
         ) : (
           <div

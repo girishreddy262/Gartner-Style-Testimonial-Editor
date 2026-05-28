@@ -597,6 +597,18 @@
   .clip:active { cursor: grabbing; }
   .clip.intro { background: #0183FF; }
   .clip.video { background: #2e2e32; color: #cbd5e1; cursor: pointer; }
+  .clip.video.seg { background: #34343a; border: 1px solid #46464d; box-sizing: border-box; }
+  .clip.video.seg.selected { background: #3d3d45; outline: 2px solid #0183FF; outline-offset: -1px; }
+  .clip.video.seg .seg-label { pointer-events: none; overflow: hidden; text-overflow: ellipsis; }
+  .seg-controls { position: absolute; right: 2px; top: 1px; bottom: 1px; display: flex; gap: 2px; align-items: center; }
+  .seg-btn {
+    width: 16px; height: 16px; padding: 0; border: none; border-radius: 3px;
+    background: rgba(0,0,0,0.45); color: #fff; font-size: 9px; line-height: 1;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+  }
+  .seg-btn:hover:not([disabled]) { background: #0183FF; }
+  .seg-btn.del:hover:not([disabled]) { background: #FC6A6B; }
+  .seg-btn[disabled] { opacity: 0.3; cursor: default; }
   .clip.meta { background: #FDDB5D; color: #0f172a; }
   .clip.callout { background: linear-gradient(135deg, #0183FF, #0183FF); }
   .clip.namecard { background: #FDDB5D; color: #1f2937; }
@@ -942,9 +954,9 @@ let TOTAL = 240;  // total seconds — may be updated when a project loads with 
 function recomputeTotal() {
   const introDur = state.intro?.duration || 0;
   const vDur = state.global.videoDuration || 0;
-  const trimStart = state.global.videoTrimStart || 0;
-  const trimEnd = state.global.videoTrimEnd > 0 ? state.global.videoTrimEnd : vDur;
-  const effectiveVideo = Math.max(0, trimEnd - trimStart);
+  // Effective video length = stitched segments (multi-clip). Falls back to
+  // legacy trim / full video via getSegments() when no segments defined.
+  const effectiveVideo = segVideoLen();
   let lastCalloutEnd = 0;
   for (const c of (state.callouts || [])) {
     if (c.end > lastCalloutEnd) lastCalloutEnd = c.end;
@@ -964,6 +976,71 @@ function recomputeTotal() {
   return TOTAL;
 }
 const PX_PER_SEC = 6;
+
+// =============================================================
+// VIDEO SEGMENTS — multi-clip model (split / delete / stitch / reorder)
+// =============================================================
+// state.global.videoSegments = [{id, from, to}] are the kept pieces of the
+// source video, in PLAY ORDER. The timeline stitches them back-to-back.
+//
+// segVideoLen()      → total stitched video length (sum of segment lengths)
+// getSegments()      → segments, auto-initialized from legacy trim / full video
+// timelineToSource(t)→ {segIndex, sourceTime} for a timeline time in the video region
+// Everything below treats timeline time as: [0..intro] = intro, then stitched video.
+
+// Returns the active segment list. If none defined yet, derives a single segment
+// from legacy trim (or the full video). Does NOT mutate state.
+function getSegments() {
+  const g = state.global;
+  if (Array.isArray(g.videoSegments) && g.videoSegments.length) return g.videoSegments;
+  const vDur = g.videoDuration || 0;
+  if (vDur <= 0) return [];
+  const from = g.videoTrimStart || 0;
+  const to = g.videoTrimEnd > 0 ? g.videoTrimEnd : vDur;
+  return [{ id: 'seg0', from, to }];
+}
+
+// Ensure state.global.videoSegments is populated (called on load / first edit).
+function ensureSegments() {
+  const g = state.global;
+  if (Array.isArray(g.videoSegments) && g.videoSegments.length) return g.videoSegments;
+  const segs = getSegments();
+  g.videoSegments = segs.map((s, i) => ({ id: s.id || ('seg' + i), from: s.from, to: s.to }));
+  return g.videoSegments;
+}
+
+// Total stitched video length (seconds).
+function segVideoLen() {
+  return getSegments().reduce((sum, s) => sum + Math.max(0, s.to - s.from), 0);
+}
+
+// Map a TIMELINE time (within the video region, i.e. t >= introDur) to which
+// segment + the SOURCE time to seek. Returns null if outside the video region.
+function timelineToSource(t) {
+  const introDur = state.intro?.duration || 0;
+  let rel = t - introDur;                 // time into the stitched video
+  if (rel < 0) return null;
+  const segs = getSegments();
+  for (let i = 0; i < segs.length; i++) {
+    const len = Math.max(0, segs[i].to - segs[i].from);
+    if (rel <= len || i === segs.length - 1) {
+      return { segIndex: i, sourceTime: segs[i].from + Math.min(rel, len) };
+    }
+    rel -= len;
+  }
+  return null;
+}
+
+// Map a SEGMENT index → its [start,end] in TIMELINE time (for drawing blocks).
+function segmentTimelineRange(i) {
+  const introDur = state.intro?.duration || 0;
+  const segs = getSegments();
+  let acc = introDur;
+  for (let k = 0; k < i; k++) acc += Math.max(0, segs[k].to - segs[k].from);
+  const len = Math.max(0, segs[i].to - segs[i].from);
+  return { start: acc, end: acc + len, len };
+}
+
 
 const state = {
   currentTime: 0,
@@ -991,8 +1068,11 @@ const state = {
     sourceVideoUrl: null,
     sourceVideoName: null,
     videoDuration: 0,      // measured from uploaded video — seconds
-    videoTrimStart: 0,     // cut from (seconds into source video)
-    videoTrimEnd: 0,       // cut to (seconds into source video, 0 = use full duration)
+    videoTrimStart: 0,     // (legacy) cut from — kept for back-compat
+    videoTrimEnd: 0,       // (legacy) cut to — kept for back-compat
+    videoSegments: [],     // [{id, from, to}] kept pieces of source, in play order.
+                           // Empty = use full video (or legacy trim). This is the
+                           // multi-clip source of truth once a video is loaded.
     videoX_none: 0,
     videoY_none: 0,
     videoX_callout: 200,
@@ -1799,23 +1879,37 @@ function renderTimeline() {
     id: 'intro', type: 'intro', start: 0, end: state.intro.duration, label: 'Intro card'
   });
 
-  // Video track. The clip block spans the KEPT (trimmed) range — that IS the
-  // visual trim indicator. Label shows kept length, and source-in/out if trimmed.
-  const trimStart = state.global.videoTrimStart || 0;
-  const trimEnd = state.global.videoTrimEnd > 0 ? state.global.videoTrimEnd : (state.global.videoDuration || 0);
-  const effLen = Math.max(0, trimEnd - trimStart);
-  const isTrimmed = (state.global.videoDuration > 0) && (trimStart > 0 || trimEnd < state.global.videoDuration);
-  let videoLabel;
-  if (effLen > 0) {
-    videoLabel = isTrimmed
-      ? `Speaker video — cut ${fmtTimeShort(trimStart)}→${fmtTimeShort(trimEnd)} (${fmtTimeShort(effLen)})`
-      : `Speaker video (${fmtTimeShort(effLen)})`;
+  // Video track — one block per segment (multi-clip). Segments stitch back-to-
+  // back starting at intro end. The selected segment shows reorder arrows + delete.
+  const segs = getSegments();
+  if (segs.length === 0) {
+    document.getElementById('trackVideo').innerHTML = clipHtml({
+      id: 'video', type: 'video', start: state.intro.duration, end: TOTAL, label: 'Speaker video'
+    });
   } else {
-    videoLabel = 'Speaker video';
+    document.getElementById('trackVideo').innerHTML = segs.map((s, i) => {
+      const r = segmentTimelineRange(i);
+      const w = Math.max(8, r.len * PX_PER_SEC);
+      const sel = s.id === state.selectedSegmentId ? 'selected' : '';
+      const label = `Clip ${i + 1} · ${fmtTimeShort(s.from)}→${fmtTimeShort(s.to)}`;
+      // Controls only on the selected segment, and only if there's room
+      let controls = '';
+      if (sel) {
+        const canLeft = i > 0;
+        const canRight = i < segs.length - 1;
+        const canDelete = segs.length > 1;
+        controls = `<div class="seg-controls">
+          <button class="seg-btn" data-seg-move="${s.id}|left" ${canLeft ? '' : 'disabled'} title="Move left">◀</button>
+          <button class="seg-btn" data-seg-move="${s.id}|right" ${canRight ? '' : 'disabled'} title="Move right">▶</button>
+          <button class="seg-btn del" data-seg-del="${s.id}" ${canDelete ? '' : 'disabled'} title="Delete clip">✕</button>
+        </div>`;
+      }
+      return `<div class="clip video seg ${sel}" data-seg="${s.id}"
+                style="left:${r.start * PX_PER_SEC}px;width:${w}px;">
+                <span class="seg-label">${escapeHtml(label)}</span>${controls}
+              </div>`;
+    }).join('');
   }
-  document.getElementById('trackVideo').innerHTML = clipHtml({
-    id: 'video', type: 'video', start: state.intro.duration, end: Math.min(TOTAL, state.intro.duration + effLen || TOTAL), label: videoLabel
-  });
 
   // Namecard
   document.getElementById('trackNamecard').innerHTML = clipHtml({
@@ -1920,7 +2014,42 @@ function bulletCount(c) {
 let dragData = null;
 let pendingDrag = null;  // armed but not yet dragging
 function bindClipInteractions() {
+  // Segment blocks on the VIDEO track — select on click, arrows reorder, ✕ deletes.
+  document.querySelectorAll('.clip.video.seg').forEach(seg => {
+    seg.onclick = (e) => {
+      if (e.target.closest('.seg-btn')) return;
+      e.stopPropagation();
+      const segId = seg.dataset.seg;
+      state.selectedSegmentId = segId;
+      state.selectedSceneId = 'global_video';
+      const segs = getSegments();
+      const idx = segs.findIndex(s => s.id === segId);
+      if (idx >= 0) {
+        const r = segmentTimelineRange(idx);
+        state.currentTime = r.start + 0.1;
+      }
+      renderAll();
+    };
+  });
+  document.querySelectorAll('[data-seg-move]').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      if (btn.disabled) return;
+      const [segId, dir] = btn.dataset.segMove.split('|');
+      reorderSegment(segId, dir);
+    };
+  });
+  document.querySelectorAll('[data-seg-del]').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      if (btn.disabled) return;
+      deleteSegment(btn.dataset.segDel);
+    };
+  });
+
   document.querySelectorAll('.clip').forEach(clip => {
+    // Segment clips handle their own clicks above
+    if (clip.classList.contains('seg')) return;
     // Click handler — fires only if no drag occurred
     clip.onclick = (e) => {
       e.stopPropagation();
@@ -2684,6 +2813,8 @@ function bindInspector() {
           if (state.global.videoTrimStart >= v.duration) {
             state.global.videoTrimStart = 0;
           }
+          // Fresh upload → start with a single full-length segment.
+          state.global.videoSegments = [{ id: 'seg' + Date.now(), from: 0, to: v.duration }];
           recomputeTotal();
           renderAll();
           saveProject();
@@ -2936,16 +3067,19 @@ function togglePlay() {
       const v = getVideoEl();
       if (v) {
         const inVideo = state.currentTime >= state.intro.duration;
-        if (inVideo && (v.paused || !lastInVideo)) {
-          const trimStart = state.global.videoTrimStart || 0;
-          const want = Math.max(0, trimStart + (state.currentTime - state.intro.duration));
-          // Only hard-seek if we've drifted (avoids stutter every frame)
-          if (Math.abs(v.currentTime - want) > 0.3) v.currentTime = want;
-          const pr = v.play();
-          if (pr && pr.catch) pr.catch((err) => {
-            console.warn('[video] play() blocked:', err && err.name);
-          });
-        } else if (!inVideo && !v.paused) {
+        if (inVideo) {
+          // Map stitched timeline time → source time via segments.
+          const map = timelineToSource(state.currentTime);
+          const want = map ? map.sourceTime : 0;
+          // Hard-seek if drifted OR if we just crossed a segment boundary
+          // (segments are non-contiguous in the source, so the video element
+          // must jump to the next segment's source position).
+          if (Math.abs(v.currentTime - want) > 0.35) v.currentTime = want;
+          if (v.paused || !lastInVideo) {
+            const pr = v.play();
+            if (pr && pr.catch) pr.catch((err) => console.warn('[video] play() blocked:', err && err.name));
+          }
+        } else if (!v.paused) {
           v.pause();
         }
         lastInVideo = inVideo;
@@ -2975,9 +3109,8 @@ function syncVideoPlayback() {
   const v = getVideoEl();
   if (!v) return;
   if (state.playing && state.currentTime >= state.intro.duration) {
-    // Map timeline time → source video time, adding the trim-start offset
-    const trimStart = state.global.videoTrimStart || 0;
-    v.currentTime = Math.max(0, trimStart + (state.currentTime - state.intro.duration));
+    const map = timelineToSource(state.currentTime);
+    v.currentTime = map ? map.sourceTime : 0;
     v.play().catch(() => {});
   } else {
     v.pause();
@@ -3011,10 +3144,11 @@ function syncVideoSeek() {
   const v = getVideoEl();
   if (!v) return;
   if (state.currentTime >= state.intro.duration) {
-    const trimStart = state.global.videoTrimStart || 0;
-    v.currentTime = trimStart + (state.currentTime - state.intro.duration);
+    const map = timelineToSource(state.currentTime);
+    v.currentTime = map ? map.sourceTime : 0;
   } else {
-    v.currentTime = state.global.videoTrimStart || 0;
+    const segs = getSegments();
+    v.currentTime = segs.length ? segs[0].from : 0;
     v.pause();
   }
 }
@@ -3128,33 +3262,110 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Cut at the playhead — trims the nearest edge (start if the playhead is in the
-// first half of the kept range, end if in the second half). Shared by the C
-// shortcut and the top-bar Cut button.
+// SPLIT at the playhead — divides the segment under the playhead into two
+// segments at that source point. Shared by the C shortcut and the Cut button.
+// (Multi-clip: this no longer just trims an edge — it creates a cut line so you
+// can delete either side.)
 function cutAtPlayhead() {
   const vDur = state.global.videoDuration || 0;
   if (vDur <= 0) { setStatus('Upload a video first', 'error'); return; }
   const introDur = state.intro.duration || 0;
-  const trimStart = state.global.videoTrimStart || 0;
-  const trimEnd = state.global.videoTrimEnd > 0 ? state.global.videoTrimEnd : vDur;
   if (state.currentTime < introDur) {
-    setStatus('Move the playhead onto the video to cut', 'error');
+    setStatus('Move the playhead onto the video to split', 'error');
     return;
   }
-  const sourceTime = Math.max(0, Math.min(vDur, trimStart + (state.currentTime - introDur)));
-  const midpoint = (trimStart + trimEnd) / 2;
-  pushHistory();
-  if (sourceTime < midpoint) {
-    if (sourceTime < trimEnd - 1) {
-      state.global.videoTrimStart = sourceTime;
-      setStatus(`Cut start → ${fmtTimeShort(sourceTime)}`, 'success');
-    }
-  } else {
-    if (sourceTime > trimStart + 1) {
-      state.global.videoTrimEnd = sourceTime;
-      setStatus(`Cut end → ${fmtTimeShort(sourceTime)}`, 'success');
-    }
+  const segs = ensureSegments();
+  const map = timelineToSource(state.currentTime);
+  if (!map) { setStatus('Move the playhead onto the video to split', 'error'); return; }
+  const seg = segs[map.segIndex];
+  const at = map.sourceTime;
+  // Don't split at the very edges (no-op / zero-length piece)
+  if (at <= seg.from + 0.05 || at >= seg.to - 0.05) {
+    setStatus('Move the playhead inside a clip to split', 'info');
+    return;
   }
+  pushHistory();
+  const left = { id: 'seg' + Date.now(), from: seg.from, to: at };
+  const right = { id: 'seg' + (Date.now() + 1), from: at, to: seg.to };
+  segs.splice(map.segIndex, 1, left, right);
+  state.selectedSegmentId = right.id;
+  setStatus(`Split at ${fmtTimeShort(state.currentTime)}`, 'success');
+  recomputeTotal();
+  syncVideoSeek();
+  renderAll();
+  saveProject();
+}
+
+// DELETE a segment by id. Everything after it ripples LEFT (stitched), and any
+// callouts/namecard after the deleted region shift earlier by the segment length.
+function deleteSegment(segId) {
+  const segs = ensureSegments();
+  const idx = segs.findIndex(s => s.id === segId);
+  if (idx < 0) return;
+  if (segs.length <= 1) { setStatus('Can’t delete the only clip', 'error'); return; }
+  pushHistory();
+  const range = segmentTimelineRange(idx);   // timeline start/end of this segment
+  const removedLen = range.len;
+  segs.splice(idx, 1);
+  // Ripple callouts/namecard that START at or after the removed region's end.
+  // Those fully inside the removed region get clamped to the cut point.
+  rippleAfter(range.start, range.end, removedLen);
+  state.selectedSegmentId = segs[Math.min(idx, segs.length - 1)]?.id || null;
+  setStatus('Clip deleted', 'success');
+  recomputeTotal();
+  // Keep playhead at the cut point
+  state.currentTime = Math.min(TOTAL, range.start);
+  syncVideoSeek();
+  renderAll();
+  saveProject();
+}
+
+// Shift callouts/namecard left by `len` if they're after `cutEnd`. Items whose
+// window straddles the removed region are clamped to `cutStart`.
+function rippleAfter(cutStart, cutEnd, len) {
+  const shift = (obj) => {
+    if (obj == null) return;
+    // Fully after the removed region → shift left by len
+    if (obj.start >= cutEnd) { obj.start -= len; obj.end -= len; return; }
+    // Straddling / inside → clamp to the cut point (keep a minimum width)
+    if (obj.end > cutStart) {
+      if (obj.start >= cutStart) obj.start = cutStart;
+      obj.end = Math.max(obj.start + 0.5, obj.end - len);
+    }
+  };
+  (state.callouts || []).forEach(c => {
+    shift(c);
+    // shift item reveal times too
+    if (Array.isArray(c.items)) c.items.forEach(it => {
+      if (it.time != null) {
+        if (it.time >= cutEnd) it.time -= len;
+        else if (it.time > cutStart) it.time = cutStart;
+        // keep within the (possibly shifted) callout window
+        it.time = Math.max(c.start, Math.min(c.end - 0.05, it.time));
+      }
+    });
+  });
+  // namecard timing if present
+  if (state.namecard && typeof state.namecard.start === 'number') shift(state.namecard);
+}
+
+// REORDER a segment one slot left or right (arrow buttons). Callouts stay put
+// (Option A — independent track), only the video segments reorder.
+function reorderSegment(segId, dir) {
+  const segs = ensureSegments();
+  const idx = segs.findIndex(s => s.id === segId);
+  if (idx < 0) return;
+  const swapWith = dir === 'left' ? idx - 1 : idx + 1;
+  if (swapWith < 0 || swapWith >= segs.length) {
+    setStatus(dir === 'left' ? 'Already first clip' : 'Already last clip', 'info');
+    return;
+  }
+  pushHistory();
+  const tmp = segs[idx];
+  segs[idx] = segs[swapWith];
+  segs[swapWith] = tmp;
+  state.selectedSegmentId = segId;
+  setStatus('Clip reordered', 'success');
   recomputeTotal();
   syncVideoSeek();
   renderAll();
@@ -3388,6 +3599,17 @@ function hydrateFromProject(p) {
         state.global.videoDuration = v.duration;
         if (!state.global.videoTrimEnd || state.global.videoTrimEnd > v.duration) {
           state.global.videoTrimEnd = v.duration;
+        }
+        // Migrate old projects (no segments) → derive a single segment from
+        // legacy trim (or full video). Clamp any saved segments to duration.
+        if (!Array.isArray(state.global.videoSegments) || !state.global.videoSegments.length) {
+          const from = state.global.videoTrimStart || 0;
+          const to = state.global.videoTrimEnd > 0 ? state.global.videoTrimEnd : v.duration;
+          state.global.videoSegments = [{ id: 'seg' + Date.now(), from, to }];
+        } else {
+          state.global.videoSegments = state.global.videoSegments
+            .map(s => ({ id: s.id, from: Math.max(0, Math.min(v.duration, s.from)), to: Math.max(0, Math.min(v.duration, s.to)) }))
+            .filter(s => s.to - s.from > 0.05);
         }
         recomputeTotal();
         renderAll();
