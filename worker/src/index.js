@@ -94,6 +94,10 @@ export default {
           const body = await request.json();
           return await getAssetUploadUrl(env, projectId, body);
         }
+        if (subpath === '/remove-bg' && request.method === 'POST') {
+          const body = await request.json();
+          return await removeBackground(env, projectId, body);
+        }
         if (subpath === '/video-url' && request.method === 'GET') {
           return await getVideoPlaybackUrl(env, projectId);
         }
@@ -216,6 +220,63 @@ async function getVideoPlaybackUrl(env, projectId) {
     expiresIn: 21600  // 6 hours
   });
   return json({ videoUrl: url });
+}
+
+// Remove the background from a portrait image using the remove.bg API, then
+// store the cut-out PNG back in S3 and return its key + a presigned GET URL.
+// Body: { s3Key }  — the S3 key of the ALREADY-UPLOADED original portrait.
+async function removeBackground(env, projectId, body) {
+  const srcKey = body?.s3Key;
+  if (!srcKey) return error('s3Key required', 400);
+  if (!env.REMOVEBG_API_KEY) return error('remove.bg API key not configured on the server', 500);
+
+  // 1) Fetch the original image bytes from S3 (presigned GET).
+  const getUrl = await signPresignedUrl(env, {
+    method: 'GET', bucket: env.S3_BUCKET, region: env.AWS_REGION, key: srcKey, expiresIn: 600
+  });
+  const srcResp = await fetch(getUrl);
+  if (!srcResp.ok) return error(`Could not read source image from S3 (HTTP ${srcResp.status})`, 502);
+  const srcBytes = new Uint8Array(await srcResp.arrayBuffer());
+
+  // 2) Call remove.bg with the image bytes (multipart form).
+  const form = new FormData();
+  form.append('image_file', new Blob([srcBytes]), 'portrait.png');
+  form.append('size', 'auto');
+  const rbResp = await fetch('https://api.remove.bg/v1.0/removebg', {
+    method: 'POST',
+    headers: { 'X-Api-Key': env.REMOVEBG_API_KEY },
+    body: form
+  });
+  if (!rbResp.ok) {
+    let detail = '';
+    try { const j = await rbResp.json(); detail = j?.errors?.[0]?.title || ''; } catch (_) {}
+    return error(`remove.bg failed (HTTP ${rbResp.status})${detail ? ': ' + detail : ''}`, 502);
+  }
+  const cutBytes = new Uint8Array(await rbResp.arrayBuffer());
+
+  // 3) Upload the cut-out PNG back to S3 under the project's assets.
+  const outKey = `testimonials/${projectId}/assets/portrait-nobg-${Date.now()}.png`;
+  const putHost = `${env.S3_BUCKET}.s3.${env.AWS_REGION}.amazonaws.com`;
+  const putUrl = `https://${putHost}/${outKey}`;
+  const signedReq = await sigV4Sign(env, {
+    method: 'PUT',
+    url: putUrl,
+    headers: { 'content-type': 'image/png' },
+    body: cutBytes,
+    service: 's3',
+    region: env.AWS_REGION
+  });
+  const putResp = await fetch(signedReq);
+  if (!putResp.ok) {
+    const t = await putResp.text().catch(() => '');
+    return error(`Could not store cut-out in S3 (HTTP ${putResp.status})${t ? ': ' + t.slice(0, 120) : ''}`, 502);
+  }
+
+  // 4) Return the new key + a presigned GET URL for immediate preview.
+  const previewUrl = await signPresignedUrl(env, {
+    method: 'GET', bucket: env.S3_BUCKET, region: env.AWS_REGION, key: outKey, expiresIn: 21600
+  });
+  return json({ s3Key: outKey, url: previewUrl });
 }
 
 async function triggerRender(env, projectId) {
