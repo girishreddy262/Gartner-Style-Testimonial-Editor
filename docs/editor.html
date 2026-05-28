@@ -1329,11 +1329,57 @@ const ICONS = {
   factory:    { tags: ['factory','industry','manufacturing','oil','gas','energy','building'], svg: '<svg viewBox="0 0 24 24"><path d="M22 22H2v-9l5 4V13l5 4V13l5 4V3h5v19z"/></svg>' },
   mobile:     { tags: ['mobile','phone','app','interface'], svg: '<svg viewBox="0 0 24 24"><path d="M17.5 1.5h-11C5.12 1.5 4 2.62 4 4v16c0 1.38 1.12 2.5 2.5 2.5h11c1.38 0 2.5-1.12 2.5-2.5V4c0-1.38-1.12-2.5-2.5-2.5zM12 21c-.83 0-1.5-.67-1.5-1.5S11.17 18 12 18s1.5.67 1.5 1.5S12.83 21 12 21zm6-4H6V4h12v13z"/></svg>' },
   handshake:  { tags: ['handshake','partnership','deal','agreement'], svg: '<svg viewBox="0 0 24 24"><path d="M16.48 10.41c-.39.39-1.04.39-1.43 0l-4.47-4.46-7.05 7.04-.66-.63c-.78-.78-.78-2.05 0-2.83L8.84 4.06c.78-.78 2.05-.78 2.83 0l4.81 4.81c.4.4.4 1.04 0 1.54zm1.42-3.55L19.36 8.32c1.17 1.17 1.17 3.07 0 4.24l-7.07 7.07c-.78.78-2.05.78-2.83 0l-.7-.7-2.12 2.12c-.39.39-1.02.39-1.41 0L3.51 19.43c-.39-.39-.39-1.02 0-1.41l2.12-2.12-.7-.7c-.78-.78-.78-2.05 0-2.83l1.41-1.41 4.47 4.46c1.17 1.17 3.07 1.17 4.24 0l2.83-2.83c.39-.39.39-1.02 0-1.41z"/></svg>' },
-  building:   { tags: ['building','office','company','enterprise','hq','headquarters'], svg: '<svg viewBox="0 0 24 24"><path d="M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm4 12H8v-2h2v2zm0-4H8v-2h2v2zm0-4H8V9h2v2zm0-4H8V5h2v2zm10 12h-8v-2h2v-2h-2v-2h2v-2h-2V9h8v10zm-2-8h-2v2h2v-2zm0 4h-2v2h2v-2z"/></svg>' }
+  building:   { tags: ['building','office','company','enterprise','hq','headquarters'], svg: '<svg viewBox="0 0 24 24"><path d="M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm4 12H8v-2h2v2zm0-4H8v-2h2v2zm0-4H8V9h2v2zm0-4H8V5h2v2zm10 12h-8v-2h2v-2h-2v-2h2v-2h-2V9h8v10zm-2-8h-2v2h2v-2zm0 4h-2v2h2v-2z"/></svg>' },
+  rocket:     { tags: ['rocket','launch','growth','startup','fast','accelerate'], svg: '<svg viewBox="0 0 24 24"><path d="M12 2.5s4.5 2.04 4.5 10.5c0 2.49-1.04 5.57-1.6 7H9.1c-.56-1.43-1.6-4.51-1.6-7C7.5 4.54 12 2.5 12 2.5zm2 8.5c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm-7.98 6.51L8 14.5s-1 .5-1.5 1.5c-.4.8-.5 3-.5 3s1.7-.1 2.5-.5c.5-.25 1-1.5 1-1.5zm12 0L16 14.5s1 .5 1.5 1.5c.4.8.5 3 .5 3s-1.7-.1-2.5-.5c-.5-.25-1-1.5-1-1.5z"/></svg>' },
+  money:      { tags: ['money','revenue','cost','dollar','savings','finance','price'], svg: '<svg viewBox="0 0 24 24"><path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/></svg>' },
+  award:      { tags: ['award','trophy','win','best','recognition','achievement'], svg: '<svg viewBox="0 0 24 24"><path d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94.63 1.5 1.98 2.63 3.61 2.96V19H7v2h10v-2h-4v-3.1c1.63-.33 2.98-1.46 3.61-2.96C19.08 12.63 21 10.55 21 8V7c0-1.1-.9-2-2-2zM5 8V7h2v3.82C5.84 10.4 5 9.3 5 8zm14 0c0 1.3-.84 2.4-2 2.82V7h2v1z"/></svg>' },
+  heart:      { tags: ['heart','wellbeing','health','care','benefits','wellness'], svg: '<svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>' },
+  graduation: { tags: ['graduation','learning','training','education','onboarding','skill'], svg: '<svg viewBox="0 0 24 24"><path d="M12 3L1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9L12 3zm6.82 6L12 12.72 5.18 9 12 5.28 18.82 9zM17 15.99l-5 2.73-5-2.73v-3.72L12 15l5-2.73v3.72z"/></svg>' },
+  gear:       { tags: ['gear','settings','config','process','automation','system'], svg: '<svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>' },
+  cloud:      { tags: ['cloud','saas','platform','hosting','infrastructure'], svg: '<svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/></svg>' },
+  lock:       { tags: ['lock','secure','privacy','governance','compliance','protected'], svg: '<svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>' },
+  phone:      { tags: ['phone','call','contact','support','mobile'], svg: '<svg viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.18z"/></svg>' },
+  mail:       { tags: ['mail','email','message','contact','inbox'], svg: '<svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>' },
+  calendar:   { tags: ['calendar','schedule','date','event','plan'], svg: '<svg viewBox="0 0 24 24"><path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7z"/></svg>' },
+  thumbsup:   { tags: ['thumbsup','approve','like','satisfaction','positive'], svg: '<svg viewBox="0 0 24 24"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>' },
+  bolt:       { tags: ['bolt','energy','power','fast','instant','speed','electric'], svg: '<svg viewBox="0 0 24 24"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>' },
+  pin:        { tags: ['pin','location','place','map','address','where'], svg: '<svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>' },
+  briefcase:  { tags: ['briefcase','work','job','business','hiring','employment'], svg: '<svg viewBox="0 0 24 24"><path d="M20 6h-4V4c0-1.11-.89-2-2-2h-4c-1.11 0-2 .89-2 2v2H4c-1.11 0-1.99.89-1.99 2L2 19c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zm-6 0h-4V4h4v2z"/></svg>' },
+  flag:       { tags: ['flag','country','milestone','goal','nation'], svg: '<svg viewBox="0 0 24 24"><path d="M14.4 6L14 4H5v17h2v-7h5.6l.4 2h7V6z"/></svg>' },
+  trending:   { tags: ['trending','growth','increase','up','improve','rise'], svg: '<svg viewBox="0 0 24 24"><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/></svg>' },
+  layers:     { tags: ['layers','stack','platform','integration','modules'], svg: '<svg viewBox="0 0 24 24"><path d="M11.99 18.54l-7.37-5.73L3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z"/></svg>' },
+  database:   { tags: ['database','data','storage','records','system'], svg: '<svg viewBox="0 0 24 24"><path d="M12 3C7.58 3 4 4.79 4 7s3.58 4 8 4 8-1.79 8-4-3.58-4-8-4zM4 9v3c0 2.21 3.58 4 8 4s8-1.79 8-4V9c0 2.21-3.58 4-8 4s-8-1.79-8-4zm0 5v3c0 2.21 3.58 4 8 4s8-1.79 8-4v-3c0 2.21-3.58 4-8 4s-8-1.79-8-4z"/></svg>' },
+  bank:       { tags: ['bank','finance','bfsi','banking','financial','money'], svg: '<svg viewBox="0 0 24 24"><path d="M11.5 1L2 6v2h19V6m-5 4v7h3v-7M2 22h19v-3H2m8-9v7h3v-7m-9 0v7h3v-7H6z"/></svg>' }
 };
+
+// =============================================================
+// COUNTRY FLAGS — simple recognizable SVG flags for region placeholders.
+// Used for the country/location callout layout. Searchable like icons.
+// =============================================================
+const FLAGS = {
+  india:       { tags: ['india','in','bharat'], svg: '<svg viewBox="0 0 24 16"><rect width="24" height="5.33" fill="#FF9933"/><rect y="5.33" width="24" height="5.33" fill="#fff"/><rect y="10.66" width="24" height="5.33" fill="#138808"/><circle cx="12" cy="8" r="1.6" fill="none" stroke="#000080" stroke-width="0.4"/></svg>' },
+  usa:         { tags: ['usa','us','united states','america'], svg: '<svg viewBox="0 0 24 16"><rect width="24" height="16" fill="#fff"/><rect width="24" height="1.23" y="0" fill="#B22234"/><rect width="24" height="1.23" y="2.46" fill="#B22234"/><rect width="24" height="1.23" y="4.92" fill="#B22234"/><rect width="24" height="1.23" y="7.38" fill="#B22234"/><rect width="24" height="1.23" y="9.84" fill="#B22234"/><rect width="24" height="1.23" y="12.3" fill="#B22234"/><rect width="24" height="1.23" y="14.76" fill="#B22234"/><rect width="10" height="8.6" fill="#3C3B6E"/></svg>' },
+  uk:          { tags: ['uk','united kingdom','britain','gb','england'], svg: '<svg viewBox="0 0 24 16"><rect width="24" height="16" fill="#012169"/><path d="M0 0l24 16M24 0L0 16" stroke="#fff" stroke-width="2.4"/><path d="M12 0v16M0 8h24" stroke="#fff" stroke-width="4"/><path d="M12 0v16M0 8h24" stroke="#C8102E" stroke-width="2.4"/></svg>' },
+  singapore:   { tags: ['singapore','sg'], svg: '<svg viewBox="0 0 24 16"><rect width="24" height="8" fill="#ED2939"/><rect y="8" width="24" height="8" fill="#fff"/><circle cx="5" cy="4" r="2.5" fill="#fff"/><circle cx="5.9" cy="4" r="2.5" fill="#ED2939"/></svg>' },
+  malaysia:    { tags: ['malaysia','my'], svg: '<svg viewBox="0 0 24 16"><rect width="24" height="16" fill="#fff"/><rect width="24" height="1.14" y="1.14" fill="#CC0001"/><rect width="24" height="1.14" y="3.43" fill="#CC0001"/><rect width="24" height="1.14" y="5.71" fill="#CC0001"/><rect width="24" height="1.14" y="8" fill="#CC0001"/><rect width="24" height="1.14" y="10.29" fill="#CC0001"/><rect width="24" height="1.14" y="12.57" fill="#CC0001"/><rect width="24" height="1.14" y="14.86" fill="#CC0001"/><rect width="12" height="9.14" fill="#010066"/></svg>' },
+  indonesia:   { tags: ['indonesia','id'], svg: '<svg viewBox="0 0 24 16"><rect width="24" height="8" fill="#CE1126"/><rect y="8" width="24" height="8" fill="#fff"/></svg>' },
+  philippines: { tags: ['philippines','ph'], svg: '<svg viewBox="0 0 24 16"><rect width="24" height="8" fill="#0038A8"/><rect y="8" width="24" height="8" fill="#CE1126"/><path d="M0 0L10 8L0 16Z" fill="#fff"/></svg>' },
+  thailand:    { tags: ['thailand','th'], svg: '<svg viewBox="0 0 24 16"><rect width="24" height="16" fill="#fff"/><rect width="24" height="2.66" fill="#A51931"/><rect width="24" height="2.66" y="13.33" fill="#A51931"/><rect width="24" height="5.33" y="5.33" fill="#2D2A4A"/></svg>' },
+  vietnam:     { tags: ['vietnam','vn'], svg: '<svg viewBox="0 0 24 16"><rect width="24" height="16" fill="#DA251D"/><path d="M12 4l1.18 3.63h3.82l-3.09 2.24 1.18 3.63L12 11.26l-3.09 2.24 1.18-3.63L7 7.63h3.82z" fill="#FF0"/></svg>' },
+  uae:         { tags: ['uae','emirates','dubai','abu dhabi'], svg: '<svg viewBox="0 0 24 16"><rect width="24" height="5.33" fill="#00732F"/><rect y="5.33" width="24" height="5.33" fill="#fff"/><rect y="10.66" width="24" height="5.33" fill="#000"/><rect width="6" height="16" fill="#FF0000"/></svg>' },
+  saudi:       { tags: ['saudi','saudi arabia','ksa'], svg: '<svg viewBox="0 0 24 16"><rect width="24" height="16" fill="#006C35"/></svg>' },
+  australia:   { tags: ['australia','au'], svg: '<svg viewBox="0 0 24 16"><rect width="24" height="16" fill="#00008B"/><rect width="12" height="8" fill="#00247D"/><path d="M0 0l12 8M12 0L0 8" stroke="#fff" stroke-width="1.5"/><path d="M6 0v8M0 4h12" stroke="#fff" stroke-width="2"/><path d="M6 0v8M0 4h12" stroke="#CF142B" stroke-width="1"/></svg>' },
+};
+
+// Merge flags into the searchable icon set happens after ICON_LIBRARY is aliased below.
 
 // Alias ICONS as ICON_LIBRARY for the picker (uses .tags + .svg structure)
 const ICON_LIBRARY = ICONS;
+
+// Merge country flags into the searchable icon set (keys prefixed "flag-").
+Object.entries(FLAGS).forEach(([k, v]) => {
+  ICON_LIBRARY['flag-' + k] = { tags: ['flag', 'country', ...v.tags], svg: v.svg };
+});
 
 // Flat SVG-only lookup for inline rendering
 const ICON_SVG = Object.fromEntries(Object.entries(ICONS).map(([k, v]) => [k, v.svg || v]));
@@ -1737,6 +1783,15 @@ function renderTimeline() {
     ticks += `<div class="time-tick" style="left:${s * PX_PER_SEC}px">${fmtTimeShort(s)}</div>`;
   }
   ruler.innerHTML = ticks;
+  // Click anywhere on the ruler to seek the playhead there (and continue
+  // playing if already playing — like clueso/CapCut). Uses offsetX within ruler.
+  ruler.style.cursor = 'pointer';
+  ruler.onclick = (e) => {
+    const rect = ruler.getBoundingClientRect();
+    const x = e.clientX - rect.left + ruler.scrollLeft;
+    const t = Math.max(0, Math.min(TOTAL, x / PX_PER_SEC));
+    seekAndMaybePlay(t);
+  };
 
   // Intro track
   document.getElementById('trackIntro').innerHTML = clipHtml({
@@ -1923,14 +1978,14 @@ function bindClipInteractions() {
     };
   });
 
-  // Track row clicks (scrub by clicking empty space)
+  // Track row clicks (scrub by clicking empty space → seek + keep playing)
   document.querySelectorAll('.track-row').forEach(row => {
+    row.style.cursor = 'pointer';
     row.onclick = (e) => {
       if (e.target.closest('.clip')) return;
       const rect = row.getBoundingClientRect();
       const t = (e.clientX - rect.left) / PX_PER_SEC;
-      state.currentTime = Math.max(0, Math.min(TOTAL, t));
-      renderAll();
+      seekAndMaybePlay(t);
     };
   });
 
@@ -2186,6 +2241,14 @@ function inspectorCallout(c) {
     </div>
     ${topFields ? `<div class="inspector-section">${topFields}</div>` : ''}
     <div class="inspector-section">${itemCards}</div>
+    <div class="inspector-section">
+      <div class="field-label">Swap content with neighbour</div>
+      <div class="helper" style="margin-bottom:8px">Swaps this callout's content with the one before/after on the timeline. Time slots stay put.</div>
+      <div class="field-row">
+        <button class="btn ghost" style="flex:1" data-swap-callout="${c.id}|prev">⇄ Swap with previous</button>
+        <button class="btn ghost" style="flex:1" data-swap-callout="${c.id}|next">Swap with next ⇄</button>
+      </div>
+    </div>
     <div class="inspector-section">
       <button class="btn ghost" style="width:100%; color:#FC6A6B" data-remove-callout="${c.id}">✕ Remove callout</button>
     </div>`;
@@ -2508,11 +2571,41 @@ function bindInspector() {
   // Remove callout
   document.querySelectorAll('[data-remove-callout]').forEach(btn => {
     btn.onclick = () => {
+      pushHistory();
       const cid = btn.dataset.removeCallout;
       state.callouts = state.callouts.filter(c => c.id !== cid);
       state.selectedSceneId = 'intro';
       state.currentTime = 1.0;
       renderAll();
+      saveProject();
+    };
+  });
+
+  // Swap content with neighbouring callout (by timeline order). Times stay put;
+  // only the content (layout, content, items) is exchanged.
+  document.querySelectorAll('[data-swap-callout]').forEach(btn => {
+    btn.onclick = () => {
+      const [cid, dir] = btn.dataset.swapCallout.split('|');
+      // Order callouts by start time
+      const ordered = [...state.callouts].sort((a, b) => a.start - b.start);
+      const pos = ordered.findIndex(c => c.id === cid);
+      if (pos < 0) return;
+      const targetPos = dir === 'prev' ? pos - 1 : pos + 1;
+      if (targetPos < 0 || targetPos >= ordered.length) {
+        setStatus(dir === 'prev' ? 'No callout before this one' : 'No callout after this one', 'info');
+        return;
+      }
+      pushHistory();
+      const a = ordered[pos];
+      const b = ordered[targetPos];
+      // Swap content fields, keep id + start + end on each
+      const tmp = { layout: a.layout, content: a.content, items: a.items };
+      a.layout = b.layout; a.content = b.content; a.items = b.items;
+      b.layout = tmp.layout; b.content = tmp.content; b.items = tmp.items;
+      callout._currentId = '__force_replay__';
+      setStatus('Content swapped', 'success');
+      renderAll();
+      saveProject();
     };
   });
 
@@ -2888,6 +2981,22 @@ function syncVideoPlayback() {
 function seekTo(t) {
   state.currentTime = Math.max(0, Math.min(TOTAL, t));
   syncVideoSeek();
+}
+
+// Seek to a time and, if currently playing, keep playing from there (clueso-style
+// tap-to-play). If paused, just move the playhead + preview that frame.
+function seekAndMaybePlay(t) {
+  state.currentTime = Math.max(0, Math.min(TOTAL, t));
+  syncVideoSeek();
+  renderCanvas();
+  // Move playheads immediately
+  document.querySelectorAll('.playhead').forEach(p => p.style.left = (state.currentTime * PX_PER_SEC) + 'px');
+  const masterPh = document.getElementById('masterPlayhead');
+  if (masterPh) masterPh.style.left = (80 + state.currentTime * PX_PER_SEC) + 'px';
+  const pf = document.getElementById('progressFill');
+  if (pf) pf.style.width = (state.currentTime / TOTAL * 100) + '%';
+  // If playing, resync the video element to the new position
+  if (state.playing) syncVideoPlayback();
 }
 
 // Sync video seek position (when scrubbing without playing)
