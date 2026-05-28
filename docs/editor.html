@@ -903,6 +903,18 @@
               <span>Upload client logo</span>
             </div>
           </div>
+
+          <!-- OUTRO video layer (full canvas, shown only during the outro) -->
+          <div id="outroLayer" style="position:absolute;inset:0;border-radius:20px;overflow:hidden;background:#000;display:none;z-index:50">
+            <video id="outroVideo" style="width:100%;height:100%;object-fit:cover" playsinline></video>
+          </div>
+
+          <!-- FULL-SCREEN flash transition (covers entire canvas, for the outro cut) -->
+          <div id="fsFlash" style="position:absolute;inset:0;border-radius:20px;pointer-events:none;overflow:hidden;opacity:0;filter:blur(8px);z-index:60">
+            <div id="fsFlare" style="position:absolute;width:170%;height:170%;background:radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(225,200,255,0.6) 18%, rgba(170,190,255,0.32) 34%, rgba(255,170,220,0.16) 50%, rgba(170,190,255,0.06) 68%, rgba(170,190,255,0) 100%); transform:translate(-50%,-50%) scale(0.5); left:100%; top:0%;"></div>
+            <div id="fsSheen" style="position:absolute;inset:-30%;background:linear-gradient(225deg, rgba(255,255,255,0.5) 0%, rgba(210,180,255,0.18) 35%, rgba(255,255,255,0) 70%); opacity:0;"></div>
+            <div id="fsWhite" style="position:absolute;inset:0;background:#fff;opacity:0;"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -979,6 +991,8 @@ function recomputeTotal() {
   // The video starts AT intro end, so the natural end is intro + effectiveVideo
   const naturalEnd = introDur + effectiveVideo;
   let total = Math.max(naturalEnd, lastCalloutEnd);
+  // Append the outro (if enabled) — it plays after everything else.
+  if (state.global.outro) total += (state.global.outroDuration || 4.0);
   // Only fall back to the 240s default when the project is genuinely empty
   // (no video measured AND no callouts). Otherwise honor the real content —
   // a 45s test with callouts should be 45s, not snap to 4 minutes.
@@ -1105,7 +1119,73 @@ function updateClipFlash() {
   if (white) white.style.opacity = (bump(p, 0.5) * 0.95).toFixed(3);
 }
 
+// Drive the full-screen flash overlay (used for the outro transition). progress
+// p in 0..1, or null to hide. Mirrors the clip-flash visuals on the fs* layer.
+function driveFsFlash(p) {
+  const flash = document.getElementById('fsFlash');
+  if (!flash) return;
+  if (p === null) { flash.style.opacity = '0'; return; }
+  flash.style.opacity = '1';
+  const smooth = (e) => { e = Math.min(1, Math.max(0, e)); return e * e * (3 - 2 * e); };
+  const bump = (x, peak) => { if (x <= 0 || x >= 1) return 0; return x < peak ? smooth(x / peak) : smooth((1 - x) / (1 - peak)); };
+  const e = smooth(p);
+  const flare = document.getElementById('fsFlare');
+  const sheen = document.getElementById('fsSheen');
+  const white = document.getElementById('fsWhite');
+  if (flare) {
+    flare.style.left = (100 - e * 100) + '%';
+    flare.style.top = (e * 100) + '%';
+    flare.style.opacity = (bump(p, 0.42) * 0.95).toFixed(3);
+    flare.style.transform = 'translate(-50%,-50%) scale(' + (0.5 + e * 1.3).toFixed(3) + ')';
+  }
+  if (sheen) sheen.style.opacity = (bump(p, 0.45) * 0.5).toFixed(3);
+  if (white) white.style.opacity = (bump(p, 0.5) * 0.95).toFixed(3);
+}
 
+// Show/hide + sync the outro video, and run the full-screen flash into it.
+function updateOutro(t) {
+  const layer = document.getElementById('outroLayer');
+  const vid = document.getElementById('outroVideo');
+  if (!layer || !vid) return;
+
+  if (!state.global.outro) {
+    layer.style.display = 'none';
+    driveFsFlash(null);
+    if (!vid.paused) vid.pause();
+    return;
+  }
+
+  const start = outroStart();
+  const inOutro = t >= start;
+
+  // Attach the source lazily once we have the URL
+  if (state.global.outroUrl && vid.src !== state.global.outroUrl) {
+    vid.src = state.global.outroUrl;
+  }
+
+  // Show the outro layer during the outro window
+  layer.style.display = inOutro ? 'block' : 'none';
+  if (inOutro) {
+    const localT = Math.max(0, t - start);
+    if (state.playing) {
+      if (vid.paused) { vid.currentTime = localT; vid.play().catch(() => {}); }
+    } else {
+      vid.pause();
+      if (Math.abs(vid.currentTime - localT) > 0.08) vid.currentTime = localT;
+    }
+  } else {
+    if (!vid.paused) vid.pause();
+  }
+
+  // Full-screen flash straddles the outro boundary (1s, half each side)
+  const fStart = start - TRANSITION_DUR / 2;
+  const fEnd = start + TRANSITION_DUR / 2;
+  if (t >= fStart && t <= fEnd) {
+    driveFsFlash((t - fStart) / TRANSITION_DUR);
+  } else {
+    driveFsFlash(null);
+  }
+}
 
 const state = {
   currentTime: 0,
@@ -1147,7 +1227,10 @@ const state = {
     clientLogoUrl: null,
     clientLogoName: null,
     clientLogoS3Key: null,
-    clipTransition: false   // diagonal flash transition between video clips (multi-clip only)
+    clipTransition: false,  // diagonal flash transition between video clips (multi-clip only)
+    outro: false,           // append the fixed Darwinbox outro at the end
+    outroUrl: null,         // presigned GET url for editor preview (fetched on demand)
+    outroDuration: 4.0      // seconds; auto-read from the MP4 when it loads
   },
 
   metas: [],
@@ -1588,6 +1671,12 @@ function activeMeta(t) { return state.metas.find(m => t >= m.start && t < m.end)
 function activeNamecard(t) { return t >= state.namecard.start && t < state.namecard.end; }
 function isIntro(t) { return t < state.intro.duration; }
 
+// Outro timing. The outro plays as the LAST segment, for outroDuration seconds.
+// outroStart = TOTAL - outroDuration. isOutro(t) → playhead is within the outro.
+function outroDur() { return state.global.outro ? (state.global.outroDuration || 4.0) : 0; }
+function outroStart() { return outroDur() > 0 ? (TOTAL - outroDur()) : Infinity; }
+function isOutro(t) { return state.global.outro && t >= outroStart(); }
+
 // =============================================================
 // CANVAS RENDERING
 // =============================================================
@@ -1762,6 +1851,7 @@ function renderCanvas() {
   // Sync video element when scrubbing (not playing) — avoids hijacking playback
   if (!state.playing) syncVideoSeek();
   updateClipFlash();
+  updateOutro(t);
   const meta = activeMeta(t);
   const co = activeCallout(t);
 
@@ -2388,6 +2478,14 @@ function inspectorGlobalVideo() {
     </div>
     ` : ''}
     <div class="inspector-section">
+      <div class="inspector-title">Outro</div>
+      <div class="helper" style="margin-bottom:8px">Adds the Darwinbox outro (~4s, with audio) to the end, with a full-screen flash transition into it.</div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#cbd5e1">
+        <input type="checkbox" id="outroToggle" ${state.global.outro ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer">
+        Add outro at the end
+      </label>
+    </div>
+    <div class="inspector-section">
       <div class="inspector-title">Framing</div>
       <div class="field">
         <div class="field-label"><span>Position X — no callout</span><span class="field-value-readout">${state.global.videoX_none}px</span></div>
@@ -2989,6 +3087,23 @@ function bindInspector() {
     pushHistory();
     state.global.clipTransition = e.target.checked;
     setStatus(e.target.checked ? 'Clip transitions on' : 'Clip transitions off', 'info');
+    renderAll();
+    saveProject(false);
+  };
+
+  // Outro toggle
+  const outroToggle = document.getElementById('outroToggle');
+  if (outroToggle) outroToggle.onchange = async (e) => {
+    pushHistory();
+    state.global.outro = e.target.checked;
+    if (e.target.checked) {
+      setStatus('Loading outro…');
+      await ensureOutroLoaded();
+      setStatus('Outro added', 'success');
+    } else {
+      setStatus('Outro removed', 'info');
+    }
+    recomputeTotal();
     renderAll();
     saveProject(false);
   };
@@ -3674,6 +3789,7 @@ function buildProjectPayload() {
       // S3 keys travel; blob URLs do not (they're regenerated server-side via presigned GET)
       sourceVideoUrl: state.global.sourceVideoUrl && state.global.sourceVideoUrl.startsWith('blob:') ? null : state.global.sourceVideoUrl,
       clientLogoUrl: state.global.clientLogoUrl && state.global.clientLogoUrl.startsWith('blob:') ? null : state.global.clientLogoUrl,
+      outroUrl: null,  // presigned, expires — re-fetched on load via ensureOutroLoaded
     },
     callouts: state.callouts,
     totalDuration: TOTAL,
@@ -3696,6 +3812,11 @@ function hydrateFromProject(p) {
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d && d.url) { state.global.clientLogoUrl = d.url; renderAll(); } })
       .catch(() => {});
+  }
+
+  // If the outro is enabled, load its (fresh) URL + duration for preview.
+  if (state.global.outro) {
+    ensureOutroLoaded().then(() => { recomputeTotal(); renderAll(); });
   }
 
   // Recompute TOTAL from current state (uses videoDuration + trim + callouts).
@@ -3956,7 +4077,41 @@ async function uploadPortraitToS3() {
   return s3Key;
 }
 
-// Upload the client logo to S3 so the RENDER (Lambda) can fetch it. Returns a
+// Fetch the fixed outro's presigned URL and read its real duration from the MP4.
+// Called when the outro toggle is switched on (and on hydrate if outro is set).
+let _outroLoadPromise = null;
+async function ensureOutroLoaded() {
+  if (state.global.outroUrl && state.global.outroDuration) return state.global.outroUrl;
+  if (_outroLoadPromise) return _outroLoadPromise;
+  _outroLoadPromise = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/outro-url`);
+      if (!res.ok) throw new Error(`outro-url HTTP ${res.status}`);
+      const { url } = await res.json();
+      state.global.outroUrl = url;
+      // Read the real duration from the MP4 metadata
+      const dur = await new Promise((resolve) => {
+        const v = document.createElement('video');
+        v.preload = 'metadata';
+        v.onloadedmetadata = () => resolve(v.duration || 4.0);
+        v.onerror = () => resolve(4.0);
+        v.src = url;
+      });
+      state.global.outroDuration = Math.round(dur * 100) / 100;
+      recomputeTotal();
+      return url;
+    } catch (e) {
+      console.error('Outro load failed', e);
+      setStatus('Could not load outro: ' + e.message, 'error');
+      return null;
+    } finally {
+      _outroLoadPromise = null;
+    }
+  })();
+  return _outroLoadPromise;
+}
+
+
 // presigned GET URL for preview. The S3 KEY is stored so the Worker presigns a
 // fresh URL at render time. A blob: URL can't be used by Lambda — that was the bug.
 async function uploadLogoToS3(file) {
