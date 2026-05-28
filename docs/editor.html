@@ -2423,6 +2423,8 @@ function renderInlineBold(rawText) {
 function bindInspector() {
   // Field bindings
   document.querySelectorAll('[data-bind]').forEach(el => {
+    // Snapshot BEFORE the user starts editing this field (once per focus)
+    el.onfocus = () => pushHistory();
     el.oninput = el.onchange = () => {
       const path = el.dataset.bind;
       let val = el.value;
@@ -2628,6 +2630,7 @@ function bindInspector() {
 
   // Trim text inputs (MM:SS or seconds). Validate + clamp + recompute.
   document.querySelectorAll('[data-trim]').forEach(inp => {
+    inp.onfocus = () => pushHistory();
     inp.onchange = () => {
       const which = inp.dataset.trim;
       const sec = parseTimeShort(inp.value);
@@ -2792,12 +2795,62 @@ function togglePlay() {
     ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>'
     : '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>';
 
+  // Unlock the video element for programmatic playback WITHIN this click gesture.
+  // Browsers block .play() from a timer unless the element was already activated
+  // by a user gesture. Since the playhead may take seconds (through the intro) to
+  // reach the video, we prime it here: a muted play()+pause() inside the gesture
+  // satisfies the autoplay policy so the loop can start it later.
+  if (state.playing) {
+    const v = getVideoEl();
+    if (v) {
+      const wasMuted = v.muted;
+      v.muted = true;
+      const pr = v.play();
+      if (pr && pr.then) {
+        pr.then(() => {
+          // If we're still in the intro, pause until the playhead reaches the video
+          if (state.currentTime < state.intro.duration) v.pause();
+          v.muted = wasMuted; // restore audio
+        }).catch((err) => {
+          console.warn('[video] prime play() blocked:', err && err.name);
+          v.muted = wasMuted;
+        });
+      }
+    }
+  }
+
   syncVideoPlayback();
 
   if (state.playing) {
+    let lastInVideo = false;
     playInterval = setInterval(() => {
       state.currentTime += 1 / FPS;
       if (state.currentTime >= TOTAL) { state.currentTime = 0; syncVideoSeek(); }
+
+      // Drive the source video element from the loop. When the playhead crosses
+      // from intro → video region, START the video. This is the fix for
+      // "play from start → video never kicks in, just shows first frame":
+      // previously syncVideoPlayback ran once at toggle time (during intro),
+      // saw currentTime < intro.duration, paused the video, and nothing ever
+      // restarted it as the playhead advanced.
+      const v = getVideoEl();
+      if (v) {
+        const inVideo = state.currentTime >= state.intro.duration;
+        if (inVideo && (v.paused || !lastInVideo)) {
+          const trimStart = state.global.videoTrimStart || 0;
+          const want = Math.max(0, trimStart + (state.currentTime - state.intro.duration));
+          // Only hard-seek if we've drifted (avoids stutter every frame)
+          if (Math.abs(v.currentTime - want) > 0.3) v.currentTime = want;
+          const pr = v.play();
+          if (pr && pr.catch) pr.catch((err) => {
+            console.warn('[video] play() blocked:', err && err.name);
+          });
+        } else if (!inVideo && !v.paused) {
+          v.pause();
+        }
+        lastInVideo = inVideo;
+      }
+
       renderCanvas();
       document.querySelectorAll('.playhead').forEach(p => p.style.left = (state.currentTime * PX_PER_SEC) + 'px');
       const masterPh = document.getElementById('masterPlayhead');
@@ -2806,6 +2859,8 @@ function togglePlay() {
     }, 1000 / FPS);
   } else {
     clearInterval(playInterval);
+    const v = getVideoEl();
+    if (v) v.pause();
   }
 }
 
@@ -2856,6 +2911,7 @@ document.getElementById('skipFwdBtn').onclick = () => { state.currentTime = Math
 // ADD CALLOUT
 // =============================================================
 document.getElementById('addCalloutBtn').onclick = () => {
+  pushHistory();
   // Find a gap
   let start = state.intro.duration + 1;
   const sorted = [...state.callouts].sort((a, b) => a.start - b.start);
@@ -2896,6 +2952,17 @@ document.addEventListener('keydown', (e) => {
       return;
     }
   }
+  // Cmd/Ctrl + Z to undo, Cmd/Ctrl + Shift + Z (or Ctrl+Y) to redo
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    if (e.shiftKey) redo(); else undo();
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') {
+    e.preventDefault();
+    redo();
+    return;
+  }
   // Cmd/Ctrl + S to save
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
     e.preventDefault();
@@ -2930,10 +2997,12 @@ document.addEventListener('keydown', (e) => {
   } else if (e.code === 'Delete' || e.code === 'Backspace') {
     if (state.selectedSceneId.startsWith('c') && state.callouts.find(c => c.id === state.selectedSceneId)) {
       e.preventDefault();
+      pushHistory();
       state.callouts = state.callouts.filter(c => c.id !== state.selectedSceneId);
       state.selectedSceneId = 'intro';
       state.currentTime = 1.0;
       renderAll();
+      saveProject();
     }
   } else if (e.code === 'KeyC' && !e.metaKey && !e.ctrlKey) {
     // C = cut at playhead. Sets the nearest trim point (start if playhead is in
@@ -2953,6 +3022,7 @@ document.addEventListener('keydown', (e) => {
     const sourceTime = Math.max(0, Math.min(vDur, trimStart + (state.currentTime - introDur)));
     // Decide which side: closer to current start or current end
     const midpoint = (trimStart + trimEnd) / 2;
+    pushHistory();
     if (sourceTime < midpoint) {
       // Cut the start — keep from here
       if (sourceTime < trimEnd - 1) {
@@ -3015,6 +3085,68 @@ function renderAll() {
   renderCanvas();
   renderInspector();
 }
+
+// =============================================================
+// UNDO HISTORY (Cmd/Ctrl+Z)
+// =============================================================
+// Snapshots the editable parts of state. We keep up to 50 snapshots.
+// pushHistory() is called BEFORE a mutation; undo() restores the last one.
+const _history = [];
+const _redoStack = [];
+const HISTORY_MAX = 50;
+
+function snapshotState() {
+  return JSON.stringify({
+    intro: state.intro,
+    namecard: state.namecard,
+    global: state.global,
+    callouts: state.callouts,
+    metas: state.metas,
+  });
+}
+
+function pushHistory() {
+  const snap = snapshotState();
+  // Don't push a duplicate of the most recent snapshot
+  if (_history.length && _history[_history.length - 1] === snap) return;
+  _history.push(snap);
+  if (_history.length > HISTORY_MAX) _history.shift();
+  _redoStack.length = 0; // any new action clears redo
+}
+
+function applySnapshot(snap) {
+  const data = JSON.parse(snap);
+  state.intro = data.intro;
+  state.namecard = data.namecard;
+  state.global = data.global;
+  state.callouts = data.callouts;
+  state.metas = data.metas || [];
+  recomputeTotal();
+  renderAll();
+  // Re-sync the video element trim position
+  try { syncVideoSeek(); } catch (e) {}
+}
+
+function undo() {
+  if (!_history.length) { setStatus('Nothing to undo', 'info'); return; }
+  _redoStack.push(snapshotState());
+  const snap = _history.pop();
+  applySnapshot(snap);
+  setStatus('Undo', 'info');
+  saveProject();
+}
+
+function redo() {
+  if (!_redoStack.length) { setStatus('Nothing to redo', 'info'); return; }
+  _history.push(snapshotState());
+  const snap = _redoStack.pop();
+  applySnapshot(snap);
+  setStatus('Redo', 'info');
+  saveProject();
+}
+
+// Snapshot the current state once on load so the first undo has somewhere to go.
+setTimeout(() => { if (!_history.length) pushHistory(); }, 1500);
 
 // Default video placeholder
 videoImg.src = 'data:image/svg+xml,' + encodeURIComponent(`
