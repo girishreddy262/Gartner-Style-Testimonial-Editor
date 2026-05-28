@@ -1,5 +1,5 @@
 import React from 'react';
-import { Video, OffthreadVideo, Series, useVideoConfig } from 'remotion';
+import { Video, OffthreadVideo, Series, useVideoConfig, useCurrentFrame } from 'remotion';
 import { DARWINBOX_LOGO_URL } from '../lib/assets';
 
 // ============================================================
@@ -32,6 +32,7 @@ interface FrameProps {
     videoTrimStart?: number; // seconds — start of source video to play from
     videoTrimEnd?: number;   // seconds — end of source video (0 or unset = play to end)
     videoSegments?: { id?: string; from: number; to: number }[]; // multi-clip kept pieces
+    clipTransition?: boolean; // diagonal flash transition between clips
     clientLogoUrl: string | null;
   };
   calloutActive: boolean;
@@ -40,6 +41,58 @@ interface FrameProps {
 
 // Linear interpolation helper
 const lerp = (a: number, b: number, p: number) => a + (b - a) * p;
+
+// CLIP TRANSITION — diagonal flash overlay rendered at each clip boundary.
+// The transition straddles the cut (TRANSITION_DUR seconds total, half each side).
+// Inside <Sequence from={introFrames}>, useCurrentFrame() is 0 at the first video
+// frame, so boundaries are measured in stitched-video time. Pure CSS — no video file.
+const TRANSITION_DUR = 1.0; // seconds
+const ClipFlash: React.FC<{
+  segments: { from: number; to: number }[];
+}> = ({ segments }) => {
+  const { fps } = useVideoConfig();
+  const frame = useCurrentFrame();
+  const t = frame / fps; // seconds into the stitched video
+  if (!segments || segments.length < 2) return null;
+
+  // Boundary times (stitched-video seconds) = cumulative clip lengths.
+  let acc = 0;
+  const boundaries: number[] = [];
+  for (let i = 0; i < segments.length - 1; i++) {
+    acc += Math.max(0, segments[i].to - segments[i].from);
+    boundaries.push(acc);
+  }
+  // Find the active transition (if the playhead is within half-duration of a cut).
+  let p: number | null = null;
+  for (const b of boundaries) {
+    const startT = b - TRANSITION_DUR / 2;
+    if (t >= startT && t <= startT + TRANSITION_DUR) { p = (t - startT) / TRANSITION_DUR; break; }
+  }
+  if (p === null) return null;
+
+  const smooth = (e: number) => { e = Math.min(1, Math.max(0, e)); return e * e * (3 - 2 * e); };
+  const bump = (x: number, peak: number) => (x <= 0 || x >= 1) ? 0 : (x < peak ? smooth(x / peak) : smooth((1 - x) / (1 - peak)));
+  const e = smooth(p);
+  const flarePct = (v: number) => v + '%';
+
+  return (
+    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', filter: 'blur(8px)' }}>
+      <div style={{
+        position: 'absolute', width: '170%', height: '170%',
+        left: flarePct(100 - e * 100), top: flarePct(e * 100),
+        transform: `translate(-50%,-50%) scale(${0.5 + e * 1.3})`,
+        opacity: bump(p, 0.42) * 0.95,
+        background: 'radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(225,200,255,0.6) 18%, rgba(170,190,255,0.32) 34%, rgba(255,170,220,0.16) 50%, rgba(170,190,255,0.06) 68%, rgba(170,190,255,0) 100%)',
+      }} />
+      <div style={{
+        position: 'absolute', inset: '-30%', opacity: bump(p, 0.45) * 0.5,
+        background: 'linear-gradient(225deg, rgba(255,255,255,0.5) 0%, rgba(210,180,255,0.18) 35%, rgba(255,255,255,0) 70%)',
+      }} />
+      <div style={{ position: 'absolute', inset: 0, background: '#fff', opacity: bump(p, 0.5) * 0.95 }} />
+    </div>
+  );
+};
+
 
 export const Frame: React.FC<FrameProps> = ({
   videoUrl,
@@ -168,6 +221,13 @@ export const Frame: React.FC<FrameProps> = ({
             (no video uploaded)
           </div>
         )}
+        {global.clipTransition && (() => {
+          const segs =
+            Array.isArray(global.videoSegments) && global.videoSegments.length
+              ? global.videoSegments
+              : [];
+          return segs.length > 1 ? <ClipFlash segments={segs} /> : null;
+        })()}
       </div>
 
       {/* FOOTER BAND */}
