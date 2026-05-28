@@ -1136,6 +1136,7 @@ const state = {
     videoScale: 1.0,
     clientLogoUrl: null,
     clientLogoName: null,
+    clientLogoS3Key: null,
     clipTransition: false   // diagonal flash transition between video clips (multi-clip only)
   },
 
@@ -2901,10 +2902,26 @@ function bindInspector() {
     }
     renderAll();
   });
-  bindUploadZone('zoneClientLogo', 'image/*', (file, url) => {
+  bindUploadZone('zoneClientLogo', 'image/*', async (file, url) => {
+    // Show the local preview immediately
     state.global.clientLogoUrl = url;
     state.global.clientLogoName = file.name;
     renderAll();
+    // Upload to S3 so the RENDER can fetch it (a blob: URL won't work on Lambda).
+    try {
+      setStatus('Uploading logo…');
+      const s3Url = await uploadLogoToS3(file);
+      if (s3Url) {
+        state.global.clientLogoUrl = s3Url;       // swap blob → real S3 URL
+        state.global.clientLogoS3Key = null;
+        setStatus('Logo uploaded', 'success');
+        renderAll();
+        saveProject(false);
+      }
+    } catch (e) {
+      console.error('Logo upload failed', e);
+      setStatus('Logo upload failed: ' + e.message, 'error');
+    }
   });
 
   // Remove buttons
@@ -2935,7 +2952,7 @@ function bindInspector() {
     renderAll();
   };
   const removeLogo = document.getElementById('removeClientLogo');
-  if (removeLogo) removeLogo.onclick = (e) => { e.stopPropagation(); state.global.clientLogoUrl = null; state.global.clientLogoName = null; renderAll(); };
+  if (removeLogo) removeLogo.onclick = (e) => { e.stopPropagation(); state.global.clientLogoUrl = null; state.global.clientLogoName = null; state.global.clientLogoS3Key = null; renderAll(); };
 
   // Reset trim button — sets trim back to full video duration
   const resetTrim = document.getElementById('resetTrim');
@@ -3909,6 +3926,32 @@ async function uploadPortraitToS3() {
   if (!putRes.ok) throw new Error(`S3 PUT HTTP ${putRes.status}`);
   state.intro.portraitS3Key = s3Key;
   return s3Key;
+}
+
+// Upload the client logo to S3 so the RENDER (Lambda) can fetch it. Returns a
+// presigned GET URL for preview. The S3 KEY is stored so the Worker presigns a
+// fresh URL at render time. A blob: URL can't be used by Lambda — that was the bug.
+async function uploadLogoToS3(file) {
+  if (!currentProjectId) {
+    await saveProject(false);
+    if (!currentProjectId) { setStatus('Save the project first', 'error'); return null; }
+  }
+  const blob = file instanceof Blob ? file : await (await fetch(state.global.clientLogoUrl)).blob();
+  const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
+  const fileName = `logo-${Date.now()}.${ext}`;
+  const presignRes = await fetch(`${API_BASE}/api/projects/${currentProjectId}/asset-upload-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contentType: blob.type || 'image/png', fileName }),
+  });
+  if (!presignRes.ok) throw new Error(`Presign HTTP ${presignRes.status}`);
+  const { uploadUrl, s3Key, publicUrl } = await presignRes.json();
+  const putRes = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': blob.type || 'image/png' }, body: blob });
+  if (!putRes.ok) throw new Error(`S3 PUT HTTP ${putRes.status}`);
+  // Store the key so the Worker can presign a fresh GET URL at render time.
+  state.global.clientLogoS3Key = s3Key;
+  // For editor preview + persistence, use the publicUrl the Worker returned.
+  return publicUrl || `https://darwinbox-gartner-testimonial-editor.s3.ap-south-1.amazonaws.com/${s3Key}`;
 }
 
 // Remove the portrait background via the Worker → remove.bg.
