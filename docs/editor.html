@@ -951,7 +951,12 @@ function recomputeTotal() {
   // The video starts AT intro end, so the natural end is intro + effectiveVideo
   const naturalEnd = introDur + effectiveVideo;
   let total = Math.max(naturalEnd, lastCalloutEnd);
-  if (total < 60) total = 240; // sane fallback for empty projects
+  // Only fall back to the 240s default when the project is genuinely empty
+  // (no video measured AND no callouts). Otherwise honor the real content —
+  // a 45s test with callouts should be 45s, not snap to 4 minutes.
+  const hasContent = vDur > 0 || (state.callouts && state.callouts.length > 0);
+  if (!hasContent && total < 60) total = 240;
+  if (total < 1) total = 240;
   TOTAL = Math.ceil(total);
   const totalEl = document.getElementById('timeTotal');
   if (totalEl) totalEl.textContent = fmtTime(TOTAL);
@@ -1738,12 +1743,20 @@ function renderTimeline() {
     id: 'intro', type: 'intro', start: 0, end: state.intro.duration, label: 'Intro card'
   });
 
-  // Video track (always full duration after intro)
-  // Show effective trim length, not raw video duration, so cuts are reflected.
+  // Video track. The clip block spans the KEPT (trimmed) range — that IS the
+  // visual trim indicator. Label shows kept length, and source-in/out if trimmed.
   const trimStart = state.global.videoTrimStart || 0;
   const trimEnd = state.global.videoTrimEnd > 0 ? state.global.videoTrimEnd : (state.global.videoDuration || 0);
   const effLen = Math.max(0, trimEnd - trimStart);
-  const videoLabel = effLen > 0 ? `Speaker video (${fmtTime(effLen)})` : 'Speaker video';
+  const isTrimmed = (state.global.videoDuration > 0) && (trimStart > 0 || trimEnd < state.global.videoDuration);
+  let videoLabel;
+  if (effLen > 0) {
+    videoLabel = isTrimmed
+      ? `Speaker video — cut ${fmtTimeShort(trimStart)}→${fmtTimeShort(trimEnd)} (${fmtTimeShort(effLen)})`
+      : `Speaker video (${fmtTimeShort(effLen)})`;
+  } else {
+    videoLabel = 'Speaker video';
+  }
   document.getElementById('trackVideo').innerHTML = clipHtml({
     id: 'video', type: 'video', start: state.intro.duration, end: Math.min(TOTAL, state.intro.duration + effLen || TOTAL), label: videoLabel
   });
@@ -2082,14 +2095,14 @@ function inspectorGlobalVideo() {
     ${vDur > 0 ? `
     <div class="inspector-section">
       <div class="inspector-title">Trim / Cut</div>
-      <div class="helper" style="margin-bottom:10px">Cut the source. Output uses only the trimmed range.</div>
+      <div class="helper" style="margin-bottom:10px">Cut the source — output uses only the kept range. Type <strong>M:SS</strong> (e.g. 1:30) or seconds. Tip: press <strong>C</strong> at the playhead to cut here.</div>
       <div class="field-row">
-        <div class="field"><div class="field-label">Trim start (s)</div>
-          <input class="field-input" data-bind="global.videoTrimStart" type="number" step="0.1" min="0" max="${vDur.toFixed(1)}" value="${trimStart.toFixed(1)}"/></div>
-        <div class="field"><div class="field-label">Trim end (s)</div>
-          <input class="field-input" data-bind="global.videoTrimEnd" type="number" step="0.1" min="0" max="${vDur.toFixed(1)}" value="${trimEnd.toFixed(1)}"/></div>
+        <div class="field"><div class="field-label">Trim start</div>
+          <input class="field-input" data-trim="start" type="text" value="${fmtTimeShort(trimStart)}" placeholder="0:00"/></div>
+        <div class="field"><div class="field-label">Trim end</div>
+          <input class="field-input" data-trim="end" type="text" value="${fmtTimeShort(trimEnd)}" placeholder="${fmtTimeShort(vDur)}"/></div>
       </div>
-      <div class="helper" style="margin-top:6px">After trim: <strong>${fmtTime(effLen)}</strong> &nbsp;·&nbsp; full: ${fmtTime(vDur)}</div>
+      <div class="helper" style="margin-top:6px">Kept: <strong>${fmtTimeShort(effLen)}</strong> &nbsp;·&nbsp; full: ${fmtTimeShort(vDur)}</div>
       <div style="margin-top:8px"><button id="resetTrim" style="background:transparent;color:#94a3b8;border:1px dashed #383840;border-radius:5px;padding:6px 12px;cursor:pointer;font:inherit;font-size:11px;">Reset trim</button></div>
     </div>
     ` : ''}
@@ -2612,6 +2625,28 @@ function bindInspector() {
     recomputeTotal();
     renderAll();
   };
+
+  // Trim text inputs (MM:SS or seconds). Validate + clamp + recompute.
+  document.querySelectorAll('[data-trim]').forEach(inp => {
+    inp.onchange = () => {
+      const which = inp.dataset.trim;
+      const sec = parseTimeShort(inp.value);
+      const vDur = state.global.videoDuration || 0;
+      if (sec === null || vDur <= 0) { renderInspector(); return; }
+      let val = Math.max(0, Math.min(vDur, sec));
+      if (which === 'start') {
+        // Keep start < end
+        if (val >= (state.global.videoTrimEnd || vDur)) val = Math.max(0, (state.global.videoTrimEnd || vDur) - 1);
+        state.global.videoTrimStart = val;
+      } else {
+        if (val <= (state.global.videoTrimStart || 0)) val = Math.min(vDur, (state.global.videoTrimStart || 0) + 1);
+        state.global.videoTrimEnd = val;
+      }
+      recomputeTotal();
+      syncVideoSeek();
+      renderAll();
+    };
+  });
 }
 
 function setByPath(path, val) {
@@ -2900,6 +2935,40 @@ document.addEventListener('keydown', (e) => {
       state.currentTime = 1.0;
       renderAll();
     }
+  } else if (e.code === 'KeyC' && !e.metaKey && !e.ctrlKey) {
+    // C = cut at playhead. Sets the nearest trim point (start if playhead is in
+    // the first half of the kept range, end if in the second half).
+    const vDur = state.global.videoDuration || 0;
+    if (vDur <= 0) return; // no video
+    e.preventDefault();
+    const introDur = state.intro.duration || 0;
+    // Where is the playhead within the SOURCE video?
+    // timeline t maps to source time: trimStart + (t - introDur)
+    const trimStart = state.global.videoTrimStart || 0;
+    const trimEnd = state.global.videoTrimEnd > 0 ? state.global.videoTrimEnd : vDur;
+    if (state.currentTime < introDur) {
+      setStatus('Move the playhead onto the video to cut', 'error');
+      return;
+    }
+    const sourceTime = Math.max(0, Math.min(vDur, trimStart + (state.currentTime - introDur)));
+    // Decide which side: closer to current start or current end
+    const midpoint = (trimStart + trimEnd) / 2;
+    if (sourceTime < midpoint) {
+      // Cut the start — keep from here
+      if (sourceTime < trimEnd - 1) {
+        state.global.videoTrimStart = sourceTime;
+        setStatus(`Cut start → ${fmtTimeShort(sourceTime)}`, 'success');
+      }
+    } else {
+      // Cut the end — keep up to here
+      if (sourceTime > trimStart + 1) {
+        state.global.videoTrimEnd = sourceTime;
+        setStatus(`Cut end → ${fmtTimeShort(sourceTime)}`, 'success');
+      }
+    }
+    recomputeTotal();
+    syncVideoSeek();
+    renderAll();
   }
 });
 
@@ -3073,6 +3142,15 @@ function hydrateFromProject(p) {
         renderAll();
       }
     }, { once: true });
+    // Surface playback errors (CORS, 403, codec) — this is what catches the
+    // "other user can't see video" bug. Logs the specific media error.
+    v.addEventListener('error', () => {
+      const err = v.error;
+      const codes = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED/403/CORS' };
+      const reason = err ? (codes[err.code] || ('code ' + err.code)) : 'unknown';
+      console.error(`[video] Playback error (${reason}) for src:`, (v.src || '').slice(0, 120));
+      setStatus(`Video failed to load: ${reason} — check Console/Network`, 'error');
+    });
     renderAll();
   }).catch(e => {
     console.warn('Could not load video playback URL:', e);
@@ -3088,10 +3166,23 @@ async function fetchVideoPlaybackUrl(projectId) {
   if (!projectId) return null;
   try {
     const res = await fetch(`${API_BASE}/api/projects/${projectId}/video-url`);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      console.warn(`[video-url] HTTP ${res.status} for project ${projectId}:`, txt.slice(0, 300));
+      return null;
+    }
     const j = await res.json();
-    return j.videoUrl || j.url || null;
-  } catch (e) { console.warn('Video URL fetch failed', e); return null; }
+    const url = j.videoUrl || j.url || null;
+    if (!url) {
+      console.warn(`[video-url] Worker returned no URL for project ${projectId}. Response:`, JSON.stringify(j).slice(0, 300));
+    } else {
+      console.log(`[video-url] Got playback URL for ${projectId}:`, url.slice(0, 80) + '...');
+    }
+    return url;
+  } catch (e) {
+    console.warn(`[video-url] Fetch threw for project ${projectId}:`, e.message);
+    return null;
+  }
 }
 
 // API: load project on startup
