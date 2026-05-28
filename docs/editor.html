@@ -293,7 +293,8 @@
     overflow: hidden;
     border: 2px solid #C7E3FF;
     opacity: 0;
-    transform: translateY(calc(-50% + 30px));
+    transform: translateY(calc(-50% + 30px)) scale(0.92);
+    transform-origin: top left;
     transition: opacity 600ms cubic-bezier(0.22, 1, 0.36, 1), transform 600ms cubic-bezier(0.22, 1, 0.36, 1);
     box-shadow: 0 12px 48px rgba(15, 23, 42, 0.18);
     display: flex; flex-direction: column;
@@ -301,7 +302,7 @@
   }
   .canvas .callout.show {
     opacity: 1;
-    transform: translateY(-50%);
+    transform: translateY(-50%) scale(1);
     pointer-events: auto;
   }
   .navy-bg { background: linear-gradient(143deg, #051A2D 0.9%, #0183FF 107.65%); }
@@ -319,6 +320,16 @@
     padding: 36px 36px 64px 36px;
     color: #002B54;
     display: flex; flex-direction: column;
+    overflow: hidden;
+    transition: max-height 600ms cubic-bezier(0.25,0.1,0.25,1), padding 600ms cubic-bezier(0.25,0.1,0.25,1), opacity 300ms ease;
+  }
+  /* Collapsed state — no empty white card before the first bullet appears.
+     Card grows in WITH the first bullet via the same timing as the bullets. */
+  .body-card.card-collapsed {
+    max-height: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    opacity: 0 !important;
   }
   .body-card > .bullet + .bullet { margin-top: 22px; }
 
@@ -328,9 +339,9 @@
     color: #002B54;
     opacity: 1;
     max-height: 800px;
-    transform: translateY(0);
-    /* Same timing for all properties → reveal feels unified, not staggered */
-    transition: opacity 600ms cubic-bezier(0.25, 0.1, 0.25, 1), max-height 600ms cubic-bezier(0.25, 0.1, 0.25, 1), margin 600ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 600ms cubic-bezier(0.25, 0.1, 0.25, 1);
+    /* No translateY — the text fades + the row height animates. Translating the
+       text caused the visible "jump". Height + opacity only = smooth grow-in. */
+    transition: opacity 550ms cubic-bezier(0.25, 0.1, 0.25, 1), max-height 550ms cubic-bezier(0.25, 0.1, 0.25, 1), margin 550ms cubic-bezier(0.25, 0.1, 0.25, 1);
     overflow: hidden;
   }
   .canvas .callout .bullet.bullet-hidden {
@@ -338,7 +349,6 @@
     max-height: 0 !important;
     margin-top: 0 !important;
     margin-bottom: 0 !important;
-    transform: translateY(6px) !important;
     pointer-events: none;
   }
   .bullet-marker {
@@ -1623,8 +1633,9 @@ function renderCalloutContent(c) {
       break;
     }
     case 'bullets_with_inline_metric': {
+      const anyVisible = items.some(it => visible(it));
       html = `<div class="title-bar navy-bg">${escapeHtml(content.title || '')}</div>
-              <div class="body-card">${items.map((it, i) => {
+              <div class="body-card ${anyVisible ? '' : 'card-collapsed'}">${items.map((it, i) => {
                 const cls = visible(it) ? '' : 'bullet-hidden';
                 const raw = (it.text || '') + (it.bold ? ' **' + it.bold + '**' : '');
                 return `<div class="bullet ${cls}" data-item-idx="${i}"><div class="bullet-marker"></div><div class="bullet-text">${renderInlineBold(raw)}</div></div>`;
@@ -1642,8 +1653,9 @@ function renderCalloutContent(c) {
       break;
     }
     case 'dual_section_bullets': {
+      const anyVisible = items.some(it => visible(it));
       html = `<div class="title-bar navy-bg">${escapeHtml(content.title || '')}</div>
-              <div class="body-card">${items.map((it, i) => {
+              <div class="body-card ${anyVisible ? '' : 'card-collapsed'}">${items.map((it, i) => {
         const cls = visible(it) ? '' : 'bullet-hidden';
         const subs = (it.subs || []).map(s => `<div class="sub-bullet">${escapeHtml(s)}</div>`).join('');
         return `<div class="bullet ${cls}" data-item-idx="${i}">
@@ -2058,10 +2070,18 @@ function isBulletVisible(c, i, t) {
 function updateBulletVisibility(c, t) {
   if (!Array.isArray(c.items)) return;
   const els = callout.querySelectorAll('[data-item-idx]');
+  let anyVisible = false;
   els.forEach((el) => {
     const i = parseInt(el.dataset.itemIdx, 10);
-    el.classList.toggle('bullet-hidden', !isBulletVisible(c, i, t));
+    const vis = isBulletVisible(c, i, t);
+    if (vis) anyVisible = true;
+    el.classList.toggle('bullet-hidden', !vis);
   });
+  // Collapse the white body card until at least one bullet is visible, so there's
+  // no empty white card at the start (title+bullet layouts). The card grows in
+  // with the first bullet via its CSS max-height/padding transition.
+  const bodyCard = callout.querySelector('.body-card');
+  if (bodyCard) bodyCard.classList.toggle('card-collapsed', !anyVisible && c.items.length > 0);
 }
 
 // Returns the number of "animation steps" in a callout — used for tick markers.

@@ -37,7 +37,7 @@ export const Callout: React.FC<CalloutProps> = ({ callout, t }) => {
         border: '2px solid #C7E3FF',
         opacity,
         transform: `translateY(calc(-50% + ${translateY}px)) scale(${scale})`,
-        transformOrigin: 'left center',
+        transformOrigin: 'top left',
         boxShadow: '0 12px 48px rgba(15, 23, 42, 0.18)',
         display: 'flex',
         flexDirection: 'column',
@@ -73,8 +73,12 @@ function renderInlineBold(text: string): React.ReactNode[] {
   });
 }
 
-// ---- Per-item reveal wrapper — fades + slides + grows ----
-// ---- Per-item reveal wrapper — fades + slides + grows ----
+// ---- Per-item reveal wrapper — fades + grows height (NO translate = no jump) ----
+// Deterministic for Lambda: no DOM measurement/effects. The row's maxHeight
+// grows continuously with p (0 → ROW_MAX) and the text only fades. Because the
+// content is shorter than ROW_MAX, the visible effect is a smooth height grow
+// with no clipping and no positional jump.
+const ROW_MAX = 240; // generous per-row cap (covers 2-3 wrapped lines)
 const ItemReveal: React.FC<{
   itemTime: number | undefined;
   startFallback: number;
@@ -83,18 +87,14 @@ const ItemReveal: React.FC<{
   marginTop?: number;
 }> = ({ itemTime, startFallback, t, children, marginTop = 0 }) => {
   const target = itemTime != null ? itemTime : startFallback;
-  // 700ms reveal — same family of timing as the card entrance (800ms)
-  // so the text feels like it's flowing in WITH the card growing
-  const p = itemReveal(target, t, 0.7);
+  const p = itemReveal(target, t, 0.55);
   return (
     <div
       style={{
-        opacity: p,
-        transform: `translateY(${(1 - p) * 20}px)`,  // 20px slide — perceptible
-        maxHeight: p > 0 ? 800 : 0,
-        marginTop: p > 0 ? marginTop : 0,
+        maxHeight: p * ROW_MAX,          // grows continuously 0 → ROW_MAX
+        marginTop: p * marginTop,         // gap grows with it
+        opacity: p,                       // text only fades — no translate
         overflow: 'hidden',
-        transition: 'none', // no CSS transition; Remotion drives every frame
       }}
     >
       {children}
