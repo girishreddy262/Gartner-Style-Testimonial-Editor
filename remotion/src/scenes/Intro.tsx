@@ -74,8 +74,11 @@ export const Intro: React.FC<IntroProps> = ({ intro, clientLogoUrl, t }) => {
   const dividerP = animValue(t, 1.1, 0.6);
   const clientLogoP = animValue(t, 1.6, 0.4);
 
-  // Overall intro opacity (fades out near the end)
-  const fadeOut = interpolate(t, [intro.duration - 0.2, intro.duration + 0.3], [1, 0], {
+  // Overall intro opacity. Must be FULLY faded out BY intro.duration — the
+  // moment the speaker video begins — otherwise the fading intro lingers on top
+  // of the playing video. So we fade over [duration-0.5, duration-0.05] → gone
+  // just before the boundary.
+  const fadeOut = interpolate(t, [intro.duration - 0.5, intro.duration - 0.05], [1, 0], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });

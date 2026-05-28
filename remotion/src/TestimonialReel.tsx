@@ -76,8 +76,9 @@ export const TestimonialReel: React.FC<Props> = ({
             "'Satoshi', -apple-system, BlinkMacSystemFont, Inter, sans-serif",
         }}
       >
-        {/* INTRO (0 .. intro.duration + 0.3s) */}
-        {t < introDuration + 0.3 && (
+        {/* INTRO (0 .. intro.duration). Fully unmounts when the video begins so
+            its fade never lingers on top of the playing video. */}
+        {t < introDuration && (
           <Intro
             intro={intro}
             clientLogoUrl={global?.clientLogoUrl}
