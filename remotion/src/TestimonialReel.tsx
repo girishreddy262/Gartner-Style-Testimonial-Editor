@@ -47,6 +47,24 @@ export const TestimonialReel: React.FC<Props> = ({
     (c: any) => t >= c.start && t <= c.end
   );
 
+  // Smooth callout-active progress (0 → 1) for the video mask transition.
+  // The video shifts right when a callout is on screen. To avoid a hard snap,
+  // we ease this over TRANSITION seconds at each callout's start and end.
+  const TRANSITION = 0.5;
+  let calloutProgress = 0;
+  for (const c of (callouts || [])) {
+    // Progress ramps 0→1 over [start, start+T], stays 1, ramps 1→0 over [end-T, end]
+    if (t >= c.start - TRANSITION && t <= c.end + TRANSITION) {
+      const rampIn = Math.max(0, Math.min(1, (t - c.start) / TRANSITION));
+      const rampOut = Math.max(0, Math.min(1, (c.end - t) / TRANSITION));
+      // ease-out curve for both ramps
+      const easeIn = 1 - Math.pow(1 - rampIn, 2);
+      const easeOut = 1 - Math.pow(1 - rampOut, 2);
+      const p = Math.min(easeIn, easeOut);
+      if (p > calloutProgress) calloutProgress = p;
+    }
+  }
+
   return (
     <>
       {/* Inject Satoshi font once — base64 embedded, no network */}
@@ -77,6 +95,7 @@ export const TestimonialReel: React.FC<Props> = ({
             videoUrl={global?.sourceVideoUrl || null}
             global={global || {}}
             calloutActive={!!activeCallout}
+            calloutProgress={calloutProgress}
           />
         </Sequence>
 

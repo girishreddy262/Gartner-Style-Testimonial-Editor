@@ -34,33 +34,42 @@ interface FrameProps {
     clientLogoUrl: string | null;
   };
   calloutActive: boolean;
+  calloutProgress?: number; // 0 = no callout, 1 = callout fully on screen (eased)
 }
+
+// Linear interpolation helper
+const lerp = (a: number, b: number, p: number) => a + (b - a) * p;
 
 export const Frame: React.FC<FrameProps> = ({
   videoUrl,
   global,
   calloutActive,
+  calloutProgress = 0,
 }) => {
   const { fps } = useVideoConfig();
+  // Smoothly interpolate ALL callout-dependent dimensions using calloutProgress
+  // (0 = video full-width, 1 = video shifted right with callout). This replaces
+  // the old boolean snap that made the video jump when a callout started/ended.
+  const p = calloutProgress;
   // Video mask dimensions
-  const maskLeft = calloutActive ? 620 : 60;
+  const maskLeft = lerp(60, 620, p);
   const maskTop = 60;
   const maskRight = 60;
-  const maskBottom = 223; // canvas - footer (857) - 0 = 1080 - 857 = 223
+  const maskBottom = 223;
   const maskWidth = 1920 - maskLeft - maskRight;
   const maskHeight = 1080 - maskTop - maskBottom;
 
   // Footer band dimensions
-  const footerLeft = calloutActive ? 620 : 60;
-  const footerWidth = calloutActive ? 1240 : 1800;
+  const footerLeft = lerp(60, 620, p);
+  const footerWidth = lerp(1800, 1240, p);
   const footerTop = 857;
   const footerHeight = 163;
 
   // Divider width
-  const dividerWidth = calloutActive ? 389 : 962;
+  const dividerWidth = lerp(962, 389, p);
 
   // Video positioning
-  const videoX = calloutActive ? global.videoX_callout : global.videoX_none;
+  const videoX = lerp(global.videoX_none, global.videoX_callout, p);
   const videoY = global.videoY_none;
   const videoScale = global.videoScale || 1.0;
 

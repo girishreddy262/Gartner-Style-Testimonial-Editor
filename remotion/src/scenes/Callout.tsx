@@ -21,7 +21,7 @@ const CARD_MAX_HEIGHT = 960;
 
 // Card outer wrapper — handles entrance / exit / position
 export const Callout: React.FC<CalloutProps> = ({ callout, t }) => {
-  const { opacity, scale } = cardLifecycle(callout.start, callout.end, t);
+  const { opacity, translateY } = cardLifecycle(callout.start, callout.end, t);
   if (opacity === 0) return null;
 
   return (
@@ -36,8 +36,7 @@ export const Callout: React.FC<CalloutProps> = ({ callout, t }) => {
         overflow: 'hidden',
         border: '2px solid #C7E3FF',
         opacity,
-        transform: `translateY(-50%) scale(${scale})`,
-        transformOrigin: 'left center',
+        transform: `translateY(calc(-50% + ${translateY}px))`,
         boxShadow: '0 12px 48px rgba(15, 23, 42, 0.18)',
         display: 'flex',
         flexDirection: 'column',
