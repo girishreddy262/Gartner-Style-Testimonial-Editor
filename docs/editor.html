@@ -2912,8 +2912,7 @@ function bindInspector() {
       setStatus('Uploading logo…');
       const s3Url = await uploadLogoToS3(file);
       if (s3Url) {
-        state.global.clientLogoUrl = s3Url;       // swap blob → real S3 URL
-        state.global.clientLogoS3Key = null;
+        state.global.clientLogoUrl = s3Url;       // swap blob → real S3 URL (presigned preview)
         setStatus('Logo uploaded', 'success');
         renderAll();
         saveProject(false);
@@ -3670,6 +3669,15 @@ function hydrateFromProject(p) {
   if (p.global) Object.assign(state.global, p.global);
   if (Array.isArray(p.callouts)) state.callouts = p.callouts;
 
+  // Re-presign the client logo from its stored key (a saved presigned URL would
+  // be expired on reload → broken image). If we have the key, fetch a fresh URL.
+  if (state.global.clientLogoS3Key && currentProjectId) {
+    fetch(`${API_BASE}/api/projects/${currentProjectId}/asset-get-url?key=${encodeURIComponent(state.global.clientLogoS3Key)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && d.url) { state.global.clientLogoUrl = d.url; renderAll(); } })
+      .catch(() => {});
+  }
+
   // Recompute TOTAL from current state (uses videoDuration + trim + callouts).
   // If the project explicitly set a totalDuration AND we have no video yet,
   // use that as a hint (e.g. from docx upload), otherwise compute fresh.
@@ -3945,13 +3953,19 @@ async function uploadLogoToS3(file) {
     body: JSON.stringify({ contentType: blob.type || 'image/png', fileName }),
   });
   if (!presignRes.ok) throw new Error(`Presign HTTP ${presignRes.status}`);
-  const { uploadUrl, s3Key, publicUrl } = await presignRes.json();
+  const { uploadUrl, s3Key } = await presignRes.json();
   const putRes = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': blob.type || 'image/png' }, body: blob });
   if (!putRes.ok) throw new Error(`S3 PUT HTTP ${putRes.status}`);
   // Store the key so the Worker can presign a fresh GET URL at render time.
   state.global.clientLogoS3Key = s3Key;
-  // For editor preview + persistence, use the publicUrl the Worker returned.
-  return publicUrl || `https://darwinbox-gartner-testimonial-editor.s3.ap-south-1.amazonaws.com/${s3Key}`;
+  // Get a presigned GET URL for preview (the bucket is private — a plain public
+  // URL 403s and shows a broken image; this is why the logo broke on re-upload).
+  const getRes = await fetch(`${API_BASE}/api/projects/${currentProjectId}/asset-get-url?key=${encodeURIComponent(s3Key)}`);
+  if (getRes.ok) {
+    const { url } = await getRes.json();
+    if (url) return url;
+  }
+  throw new Error('Could not get logo preview URL');
 }
 
 // Remove the portrait background via the Worker → remove.bg.

@@ -123,13 +123,13 @@ export const Intro: React.FC<IntroProps> = ({ intro, clientLogoUrl, t }) => {
           style={{
             position: 'absolute',
             left: 152,
-            top: 217,
-            width: 880,
+            top: 212,
+            width: 900,
             color: '#fff',
             fontSize: 72,
             fontWeight: 700,
-            lineHeight: 1.1,
-            letterSpacing: '-0.02em',
+            lineHeight: 1.2,
+            letterSpacing: '-0.01em',
             opacity: headlineP,
             transform: `translateY(${(1 - headlineP) * 12}px)`,
           }}
