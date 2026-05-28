@@ -812,6 +812,7 @@
       <div class="topbar-sub" id="durationLabel">4:00 · 1920 × 1080 · 30fps</div>
     </div>
     <div style="flex:1"></div>
+    <button class="btn ghost" id="cutBtn" title="Cut at playhead (C)">✂ Cut <kbd style="background:rgba(255,255,255,0.05);padding:1px 4px;margin-left:4px;border-radius:2px;font-size:10px;">C</kbd></button>
     <button class="btn ghost" id="saveBtn">💾 Save <kbd style="background:rgba(255,255,255,0.05);padding:1px 4px;margin-left:4px;border-radius:2px;font-size:10px;">⌘S</kbd></button>
     <button class="btn primary" id="renderBtn">Approve &amp; render →</button>
   </div>
@@ -3018,6 +3019,8 @@ function syncVideoSeek() {
   }
 }
 document.getElementById('playBtn').onclick = togglePlay;
+const cutBtn = document.getElementById('cutBtn');
+if (cutBtn) cutBtn.onclick = cutAtPlayhead;
 document.getElementById('rewindBtn').onclick = () => { state.currentTime = 0; renderAll(); };
 document.getElementById('skipBackBtn').onclick = () => { state.currentTime = Math.max(0, state.currentTime - 1); renderAll(); };
 document.getElementById('skipFwdBtn').onclick = () => { state.currentTime = Math.min(TOTAL, state.currentTime + 1); renderAll(); };
@@ -3120,42 +3123,43 @@ document.addEventListener('keydown', (e) => {
       saveProject();
     }
   } else if (e.code === 'KeyC' && !e.metaKey && !e.ctrlKey) {
-    // C = cut at playhead. Sets the nearest trim point (start if playhead is in
-    // the first half of the kept range, end if in the second half).
-    const vDur = state.global.videoDuration || 0;
-    if (vDur <= 0) return; // no video
     e.preventDefault();
-    const introDur = state.intro.duration || 0;
-    // Where is the playhead within the SOURCE video?
-    // timeline t maps to source time: trimStart + (t - introDur)
-    const trimStart = state.global.videoTrimStart || 0;
-    const trimEnd = state.global.videoTrimEnd > 0 ? state.global.videoTrimEnd : vDur;
-    if (state.currentTime < introDur) {
-      setStatus('Move the playhead onto the video to cut', 'error');
-      return;
-    }
-    const sourceTime = Math.max(0, Math.min(vDur, trimStart + (state.currentTime - introDur)));
-    // Decide which side: closer to current start or current end
-    const midpoint = (trimStart + trimEnd) / 2;
-    pushHistory();
-    if (sourceTime < midpoint) {
-      // Cut the start — keep from here
-      if (sourceTime < trimEnd - 1) {
-        state.global.videoTrimStart = sourceTime;
-        setStatus(`Cut start → ${fmtTimeShort(sourceTime)}`, 'success');
-      }
-    } else {
-      // Cut the end — keep up to here
-      if (sourceTime > trimStart + 1) {
-        state.global.videoTrimEnd = sourceTime;
-        setStatus(`Cut end → ${fmtTimeShort(sourceTime)}`, 'success');
-      }
-    }
-    recomputeTotal();
-    syncVideoSeek();
-    renderAll();
+    cutAtPlayhead();
   }
 });
+
+// Cut at the playhead — trims the nearest edge (start if the playhead is in the
+// first half of the kept range, end if in the second half). Shared by the C
+// shortcut and the top-bar Cut button.
+function cutAtPlayhead() {
+  const vDur = state.global.videoDuration || 0;
+  if (vDur <= 0) { setStatus('Upload a video first', 'error'); return; }
+  const introDur = state.intro.duration || 0;
+  const trimStart = state.global.videoTrimStart || 0;
+  const trimEnd = state.global.videoTrimEnd > 0 ? state.global.videoTrimEnd : vDur;
+  if (state.currentTime < introDur) {
+    setStatus('Move the playhead onto the video to cut', 'error');
+    return;
+  }
+  const sourceTime = Math.max(0, Math.min(vDur, trimStart + (state.currentTime - introDur)));
+  const midpoint = (trimStart + trimEnd) / 2;
+  pushHistory();
+  if (sourceTime < midpoint) {
+    if (sourceTime < trimEnd - 1) {
+      state.global.videoTrimStart = sourceTime;
+      setStatus(`Cut start → ${fmtTimeShort(sourceTime)}`, 'success');
+    }
+  } else {
+    if (sourceTime > trimStart + 1) {
+      state.global.videoTrimEnd = sourceTime;
+      setStatus(`Cut end → ${fmtTimeShort(sourceTime)}`, 'success');
+    }
+  }
+  recomputeTotal();
+  syncVideoSeek();
+  renderAll();
+  saveProject();
+}
 
 // =============================================================
 // SAVE
