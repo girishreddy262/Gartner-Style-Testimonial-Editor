@@ -37,7 +37,7 @@ export const Callout: React.FC<CalloutProps> = ({ callout, t }) => {
         border: '2px solid #C7E3FF',
         opacity,
         transform: `translateY(-50%) scale(${scale})`,
-        transformOrigin: 'top left',
+        transformOrigin: 'left center',
         boxShadow: '0 12px 48px rgba(15, 23, 42, 0.18)',
         display: 'flex',
         flexDirection: 'column',
@@ -82,12 +82,14 @@ const ItemReveal: React.FC<{
   marginTop?: number;
 }> = ({ itemTime, startFallback, t, children, marginTop = 0 }) => {
   const target = itemTime != null ? itemTime : startFallback;
-  const p = itemReveal(target, t, 0.6);
+  // 700ms reveal — same family of timing as the card entrance (800ms)
+  // so the text feels like it's flowing in WITH the card growing
+  const p = itemReveal(target, t, 0.7);
   return (
     <div
       style={{
         opacity: p,
-        transform: `translateY(${(1 - p) * 6}px)`,
+        transform: `translateY(${(1 - p) * 20}px)`,  // 20px slide — perceptible
         maxHeight: p > 0 ? 800 : 0,
         marginTop: p > 0 ? marginTop : 0,
         overflow: 'hidden',

@@ -27,19 +27,24 @@ export const itemReveal = (
   return EASE_OUT(t01(t, itemTime, itemTime + duration));
 };
 
-// Card scale-in animation for callouts (matches editor: 700ms cubic-bezier(0.22, 1, 0.36, 1))
-// Returns { opacity, scale } from 0 → 1 across the duration.
+// Card scale-in animation for callouts.
+// Tuned for a visible "ease-in" feel, not a sudden pop:
+//   - Duration 800ms (was 700ms) — slightly longer to be perceptible
+//   - Scale starts at 0.88 not 0 — looks like a card growing into view, not exploding
+//   - Quadratic ease-out — gentler than pow(1-p, 4) which finishes too fast
+//   - Opacity ramps the FULL duration in lockstep with scale (no early plateau)
 export const cardEntrance = (
   startTime: number,
   t: number,
-  duration = 0.7
+  duration = 0.8
 ): { opacity: number; scale: number } => {
   const p = t01(t, startTime, startTime + duration);
-  const ease = 1 - Math.pow(1 - p, 4); // sharper ease-out (cubic-bezier(0.22, 1, 0.36, 1) approximation)
-  return { opacity: p < 0.6 ? p / 0.6 : 1, scale: ease };
+  const ease = 1 - Math.pow(1 - p, 2); // quadratic ease-out — visible the whole time
+  const scale = 0.88 + ease * 0.12;     // 0.88 → 1.0
+  return { opacity: ease, scale };
 };
 
-// Card exit animation (faster, simpler)
+// Card exit animation (faster, simpler — exits don't need to be perceptible)
 export const cardExit = (
   endTime: number,
   t: number,
@@ -55,17 +60,15 @@ export const cardLifecycle = (
   end: number,
   t: number
 ): { opacity: number; scale: number } => {
-  if (t < start) return { opacity: 0, scale: 0 };
+  if (t < start) return { opacity: 0, scale: 0.88 };
   if (t > end) return { opacity: 0, scale: 0.95 };
-  // Entrance during first 0.7s
-  if (t < start + 0.7) {
-    const e = cardEntrance(start, t);
-    return e;
+  // Entrance during first 0.8s
+  if (t < start + 0.8) {
+    return cardEntrance(start, t);
   }
   // Exit during last 0.4s
   if (t > end - 0.4) {
-    const e = cardExit(end, t);
-    return e;
+    return cardExit(end, t);
   }
   return { opacity: 1, scale: 1 };
 };

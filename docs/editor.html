@@ -293,9 +293,9 @@
     overflow: hidden;
     border: 2px solid #C7E3FF;
     opacity: 0;
-    transform: translateY(-50%) scale(0);
-    transform-origin: top left;
-    transition: opacity 400ms ease, transform var(--anim-dur) var(--anim-ease);
+    transform: translateY(-50%) scale(0.88);
+    transform-origin: left center;
+    transition: opacity 600ms cubic-bezier(0.22, 1, 0.36, 1), transform 800ms cubic-bezier(0.22, 1, 0.36, 1);
     box-shadow: 0 12px 48px rgba(15, 23, 42, 0.18);
     display: flex; flex-direction: column;
     pointer-events: none;
@@ -461,12 +461,17 @@
   .canvas .callout .timed-item {
     opacity: 1;
     max-height: 1200px;
-    transition: opacity 400ms ease, max-height 500ms cubic-bezier(0.22, 1, 0.36, 1), margin 500ms ease, padding 500ms ease;
+    transform: translateY(0);
+    transition: opacity 700ms cubic-bezier(0.22, 1, 0.36, 1),
+                max-height 700ms cubic-bezier(0.22, 1, 0.36, 1),
+                transform 700ms cubic-bezier(0.22, 1, 0.36, 1),
+                margin 700ms ease, padding 700ms ease;
     overflow: hidden;
   }
   .canvas .callout .timed-item.timed-hidden {
     opacity: 0;
     max-height: 0;
+    transform: translateY(20px);
     margin-top: -22px;
     margin-bottom: 0;
     pointer-events: none;

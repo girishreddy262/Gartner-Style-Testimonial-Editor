@@ -241,6 +241,7 @@ async function triggerRender(env, projectId) {
 
   const payload = {
     type: 'start',
+    version: '4.0.461',  // Required by Remotion Lambda — must match the function's runtime version
     serveUrl: env.REMOTION_SERVE_URL,
     composition: 'TestimonialReel',
     inputProps,
@@ -286,6 +287,7 @@ async function getRenderStatus(env, projectId) {
 
   const payload = {
     type: 'status',
+    version: '4.0.461',
     renderId: project.render.renderId,
     bucketName: project.render.bucketName
   };
