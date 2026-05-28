@@ -2582,11 +2582,11 @@ function bindInspector() {
   });
 
   // Swap content with neighbouring callout (by timeline order). Times stay put;
-  // only the content (layout, content, items) is exchanged.
+  // only the content (layout, content, items) is exchanged. Deep-cloned so
+  // repeated swaps never end up sharing object references.
   document.querySelectorAll('[data-swap-callout]').forEach(btn => {
     btn.onclick = () => {
       const [cid, dir] = btn.dataset.swapCallout.split('|');
-      // Order callouts by start time
       const ordered = [...state.callouts].sort((a, b) => a.start - b.start);
       const pos = ordered.findIndex(c => c.id === cid);
       if (pos < 0) return;
@@ -2598,13 +2598,19 @@ function bindInspector() {
       pushHistory();
       const a = ordered[pos];
       const b = ordered[targetPos];
-      // Swap content fields, keep id + start + end on each
-      const tmp = { layout: a.layout, content: a.content, items: a.items };
-      a.layout = b.layout; a.content = b.content; a.items = b.items;
-      b.layout = tmp.layout; b.content = tmp.content; b.items = tmp.items;
+      // Deep clone each side's content payload, then assign across.
+      const clone = (x) => JSON.parse(JSON.stringify(x ?? null));
+      const aPayload = { layout: a.layout, content: clone(a.content), items: clone(a.items) };
+      const bPayload = { layout: b.layout, content: clone(b.content), items: clone(b.items) };
+      a.layout = bPayload.layout; a.content = bPayload.content || {}; a.items = bPayload.items || [];
+      b.layout = aPayload.layout; b.content = aPayload.content || {}; b.items = aPayload.items || [];
       callout._currentId = '__force_replay__';
+      // Move the playhead into the selected callout so its content is visible
+      // (not "generic/empty" because the playhead was before the reveal times).
+      const sel = state.callouts.find(c => c.id === cid);
+      if (sel) state.currentTime = Math.min(sel.end - 0.1, sel.start + (sel.end - sel.start) * 0.9);
       setStatus('Content swapped', 'success');
-      renderAll();
+      renderAll();          // re-renders canvas + timeline + a FRESH inspector
       saveProject();
     };
   });
