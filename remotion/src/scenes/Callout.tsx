@@ -21,7 +21,7 @@ const CARD_MAX_HEIGHT = 960;
 
 // Card outer wrapper — handles entrance / exit / position
 export const Callout: React.FC<CalloutProps> = ({ callout, t }) => {
-  const { opacity, translateY } = cardLifecycle(callout.start, callout.end, t);
+  const { opacity, translateY, scale } = cardLifecycle(callout.start, callout.end, t);
   if (opacity === 0) return null;
 
   return (
@@ -36,7 +36,8 @@ export const Callout: React.FC<CalloutProps> = ({ callout, t }) => {
         overflow: 'hidden',
         border: '2px solid #C7E3FF',
         opacity,
-        transform: `translateY(calc(-50% + ${translateY}px))`,
+        transform: `translateY(calc(-50% + ${translateY}px)) scale(${scale})`,
+        transformOrigin: 'left center',
         boxShadow: '0 12px 48px rgba(15, 23, 42, 0.18)',
         display: 'flex',
         flexDirection: 'column',
@@ -72,6 +73,7 @@ function renderInlineBold(text: string): React.ReactNode[] {
   });
 }
 
+// ---- Per-item reveal wrapper — fades + slides + grows ----
 // ---- Per-item reveal wrapper — fades + slides + grows ----
 const ItemReveal: React.FC<{
   itemTime: number | undefined;
@@ -116,6 +118,50 @@ const bodyCardStyle: React.CSSProperties = {
   color: '#002B54',
   display: 'flex',
   flexDirection: 'column',
+};
+
+// How "open" the white body card is at time t: 0 before the first bullet's
+// reveal, easing to 1 as the first bullet appears. This collapses the card
+// (height + padding + background) so there's NO empty white card at the start —
+// the card grows in WITH the first bullet via the existing item-reveal grow.
+function cardOpenProgress(items: any[], c: any, t: number): number {
+  if (!items || items.length === 0) return 1; // no items → leave as-is
+  // The earliest reveal time among items (fallback to callout start)
+  const firstTime = items.reduce((min: number, it: any) => {
+    const tm = it.time != null ? it.time : c.start;
+    return Math.min(min, tm);
+  }, Infinity);
+  const start = isFinite(firstTime) ? firstTime : c.start;
+  return itemReveal(start, t, 0.7); // same 0.7s curve as the bullets
+}
+
+// White body card that collapses to nothing before the first bullet, then
+// expands in sync with the first bullet's reveal. `open` is 0→1.
+const BodyCard: React.FC<{
+  open: number;
+  style?: React.CSSProperties;
+  children: React.ReactNode;
+}> = ({ open, style, children }) => {
+  // Scale the vertical padding + collapse height with `open` so the card has
+  // zero presence at open=0 (no empty white box) and full padding at open=1.
+  const padTop = 36 * open;
+  const padBottom = 64 * open;
+  return (
+    <div
+      style={{
+        ...bodyCardStyle,
+        ...style,
+        paddingTop: padTop,
+        paddingBottom: padBottom,
+        maxHeight: open > 0 ? 2000 : 0,
+        opacity: open > 0.02 ? 1 : 0,
+        overflow: 'hidden',
+        transition: 'none',
+      }}
+    >
+      {children}
+    </div>
+  );
 };
 const bulletRowStyle: React.CSSProperties = {
   display: 'flex',
@@ -254,7 +300,7 @@ function renderBulletsInline(
   return (
     <>
       <div style={titleBarStyle}>{content.title || ''}</div>
-      <div style={bodyCardStyle}>
+      <BodyCard open={cardOpenProgress(items, c, t)}>
         {items.map((it: any, i: number) => {
           const raw =
             (it.text || '') + (it.bold ? ' **' + it.bold + '**' : '');
@@ -273,7 +319,7 @@ function renderBulletsInline(
             </ItemReveal>
           );
         })}
-      </div>
+      </BodyCard>
     </>
   );
 }
@@ -347,7 +393,7 @@ function renderDualSection(
   return (
     <>
       <div style={titleBarStyle}>{content.title || ''}</div>
-      <div style={{ ...bodyCardStyle, padding: '36px 36px 64px 36px' }}>
+      <BodyCard open={cardOpenProgress(items, c, t)} style={{ padding: '36px 36px 64px 36px' }}>
         {items.map((it: any, i: number) => (
           <ItemReveal
             key={i}
@@ -403,7 +449,7 @@ function renderDualSection(
             </div>
           </ItemReveal>
         ))}
-      </div>
+      </BodyCard>
     </>
   );
 }

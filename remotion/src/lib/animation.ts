@@ -27,29 +27,34 @@ export const itemReveal = (
   return EASE_OUT(t01(t, itemTime, itemTime + duration));
 };
 
-// Card entrance — fade + gentle slide-up (NO scale).
-// Scale was causing the card to "jump" because it compounded with the
-// content height changing as items revealed. A fade+slide reads as smooth
-// and is what professional lower-thirds use.
+// Card entrance — fade + gentle slide-up + subtle scale.
 export const cardEntrance = (
   startTime: number,
   t: number,
   duration = 0.6
-): { opacity: number; translateY: number } => {
+): { opacity: number; translateY: number; scale: number } => {
   const p = t01(t, startTime, startTime + duration);
   const ease = 1 - Math.pow(1 - p, 3); // cubic ease-out
-  return { opacity: ease, translateY: (1 - ease) * 30 }; // slides up 30px → 0
+  return {
+    opacity: ease,
+    translateY: (1 - ease) * 30,   // slides up 30px → 0
+    scale: 0.92 + ease * 0.08,     // scales 0.92 → 1.0
+  };
 };
 
-// Card exit — fade + slight slide-down
+// Card exit — MIRRORS the entrance (fade + slide + scale), reversed.
 export const cardExit = (
   endTime: number,
   t: number,
-  duration = 0.4
-): { opacity: number; translateY: number } => {
+  duration = 0.5
+): { opacity: number; translateY: number; scale: number } => {
   const p = t01(t, endTime - duration, endTime);
-  const ease = 1 - Math.pow(1 - p, 2);
-  return { opacity: 1 - ease, translateY: ease * 15 };
+  const ease = 1 - Math.pow(1 - p, 3); // same cubic ease-out as entrance
+  return {
+    opacity: 1 - ease,
+    translateY: ease * 30,         // slides DOWN 0 → 30px (mirror of entry's up)
+    scale: 1.0 - ease * 0.08,      // scales 1.0 → 0.92 (mirror of entry)
+  };
 };
 
 // Convenience: full card visibility from start to end, with entrance and exit
@@ -57,10 +62,12 @@ export const cardLifecycle = (
   start: number,
   end: number,
   t: number
-): { opacity: number; translateY: number } => {
-  if (t < start) return { opacity: 0, translateY: 30 };
-  if (t > end) return { opacity: 0, translateY: 15 };
-  if (t < start + 0.6) return cardEntrance(start, t);
-  if (t > end - 0.4) return cardExit(end, t);
-  return { opacity: 1, translateY: 0 };
+): { opacity: number; translateY: number; scale: number } => {
+  const ENTRANCE = 0.6;
+  const EXIT = 0.5;
+  if (t < start) return { opacity: 0, translateY: 30, scale: 0.92 };
+  if (t > end) return { opacity: 0, translateY: 30, scale: 0.92 };
+  if (t < start + ENTRANCE) return cardEntrance(start, t, ENTRANCE);
+  if (t > end - EXIT) return cardExit(end, t, EXIT);
+  return { opacity: 1, translateY: 0, scale: 1 };
 };
