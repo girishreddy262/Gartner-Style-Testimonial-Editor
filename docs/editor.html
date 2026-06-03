@@ -2982,9 +2982,34 @@ function bindInspector() {
   });
 
   // Upload zones
-  bindUploadZone('zoneIntroPortrait', 'image/*', (file, url) => {
+  bindUploadZone('zoneIntroPortrait', 'image/*', async (file, url) => {
+    // Show local preview immediately so the user sees something fast
     state.intro.portraitUrl = url;
+    state.intro.portraitNoBg = false;
+    state.intro.portraitS3Key = null;
     renderAll();
+    // Push to S3 so it survives reloads (presigned URLs expire) AND so the
+    // render (Lambda) can fetch it. A blob: URL breaks both — that was the bug.
+    try {
+      setStatus('Uploading portrait…');
+      const key = await uploadPortraitToS3();
+      if (key) {
+        // Swap the blob URL for a presigned GET URL via the worker
+        const r = await fetch(`${API_BASE}/api/projects/${currentProjectId}/asset-get-url?key=${encodeURIComponent(key)}`);
+        if (r.ok) {
+          const d = await r.json();
+          if (d && d.url) {
+            state.intro.portraitUrl = d.url;
+            renderAll();
+          }
+        }
+        setStatus('Portrait uploaded', 'success');
+        saveProject(false);
+      }
+    } catch (e) {
+      console.error('Portrait upload failed', e);
+      setStatus('Portrait upload failed: ' + e.message, 'error');
+    }
   });
   bindUploadZone('zoneSourceVideo', 'video/*,image/*', (file, url) => {
     state.global.sourceVideoUrl = url;
@@ -3782,7 +3807,12 @@ let currentProjectId = getJobIdFromUrl();
 // Build the project payload sent to the Worker. Excludes large blob URLs.
 function buildProjectPayload() {
   return {
-    intro: { ...state.intro },
+    intro: {
+      ...state.intro,
+      // A blob: URL is dead after reload — drop it. The S3 key is kept and
+      // re-presigned on hydrate.
+      portraitUrl: state.intro.portraitUrl && state.intro.portraitUrl.startsWith('blob:') ? null : state.intro.portraitUrl,
+    },
     namecard: { ...state.namecard },
     global: {
       ...state.global,
@@ -3811,6 +3841,15 @@ function hydrateFromProject(p) {
     fetch(`${API_BASE}/api/projects/${currentProjectId}/asset-get-url?key=${encodeURIComponent(state.global.clientLogoS3Key)}`)
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d && d.url) { state.global.clientLogoUrl = d.url; renderAll(); } })
+      .catch(() => {});
+  }
+
+  // Re-presign the speaker portrait too — same expiry issue. Without this, the
+  // portrait shows a broken-image icon after reload.
+  if (state.intro.portraitS3Key && currentProjectId) {
+    fetch(`${API_BASE}/api/projects/${currentProjectId}/asset-get-url?key=${encodeURIComponent(state.intro.portraitS3Key)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && d.url) { state.intro.portraitUrl = d.url; renderAll(); } })
       .catch(() => {});
   }
 
