@@ -34,7 +34,9 @@
 <script>
   function fmtDate(iso) {
     const d = new Date(iso);
-    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+    const date = d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+    const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    return date + ', ' + time;
   }
   function statusLabel(s) {
     return { editing: 'Editing', pending_render: 'Queued', rendering: 'Rendering', complete: 'Done', failed: 'Failed' }[s] || s;
@@ -84,10 +86,11 @@
               <div class="card-status ${status}">${statusLabel(status)}</div>
             </div>
             <div class="card-body">
-              <div class="card-title">${escapeHtml(title)}</div>
-              <div class="card-meta">${escapeHtml(sub)} · ${fmtDate(j.updatedAt)}</div>
+              <div class="card-title">${escapeHtml(title)} — ${fmtDate(j.updatedAt)}</div>
+              <div class="card-meta">${escapeHtml(sub)}</div>
               <div class="card-actions">
                 ${actions}
+                <button class="btn" data-duplicate="${j.projectId}" title="Duplicate">⧉</button>
                 <button class="btn btn-danger" data-delete="${j.projectId}" title="Delete">✕</button>
               </div>
             </div>
@@ -107,6 +110,22 @@
             console.error(err);
             toast('Delete failed: ' + err.message, 'error');
             btn.disabled = false; btn.textContent = '✕';
+          }
+        };
+      });
+
+      list.querySelectorAll('[data-duplicate]').forEach(btn => {
+        btn.onclick = async (e) => {
+          e.preventDefault(); e.stopPropagation();
+          btn.disabled = true; btn.textContent = '…';
+          try {
+            const dup = await API.duplicateProject(btn.dataset.duplicate);
+            toast('Duplicated as "' + ((dup.speaker && dup.speaker.name) || dup.projectId) + '"', 'success');
+            render();
+          } catch (err) {
+            console.error(err);
+            toast('Duplicate failed: ' + err.message, 'error');
+            btn.disabled = false; btn.textContent = '⧉';
           }
         };
       });

@@ -48,6 +48,10 @@
     async deleteProject(projectId) {
       await http(`/api/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' });
     },
+    async duplicateProject(projectId) {
+      const r = await http(`/api/projects/${encodeURIComponent(projectId)}/duplicate`, { method: 'POST' });
+      return r.project;
+    },
 
     // Video upload (presigned PUT to S3)
     async getVideoUploadUrl(projectId, fileName, contentType) {
