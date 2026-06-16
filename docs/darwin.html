@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Darwin Reel Editor — Coming Soon</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+<style>
+  .coming-wrap {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 56px 24px;
+    text-align: center;
+  }
+  .coming-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #7C3AED, #4338CA);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    color: #fff;
+    margin-bottom: 20px;
+  }
+  .coming-title {
+    font-size: 32px;
+    font-weight: 700;
+    color: #002B54;
+    margin: 0 0 8px;
+    letter-spacing: -0.02em;
+  }
+  .coming-sub {
+    font-size: 14px;
+    color: #5B7795;
+    margin: 0 0 32px;
+  }
+  .feature-card {
+    background: #FFFFFF;
+    border: 1px solid #DCEBFA;
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin: 12px 0;
+    text-align: left;
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+  }
+  .feature-emoji {
+    font-size: 22px;
+    line-height: 1;
+    margin-top: 2px;
+  }
+  .feature-text { flex: 1; }
+  .feature-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #002B54;
+    margin: 0 0 4px;
+  }
+  .feature-desc {
+    font-size: 13px;
+    color: #5B7795;
+    line-height: 1.5;
+    margin: 0;
+  }
+  .back-link {
+    display: inline-block;
+    margin-top: 32px;
+    color: #0183FF;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .back-link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <a class="topbar-brand" href="home.html">
+    <span class="topbar-logo">d</span>
+    <span class="topbar-title">Darwinbox MarkOps Tools</span>
+  </a>
+  <a href="home.html" class="btn">← Back to hub</a>
+</div>
+
+<div class="coming-wrap">
+  <div class="coming-icon">✨</div>
+  <h1 class="coming-title">Darwin Reel Editor</h1>
+  <p class="coming-sub">In development. Here's what's coming.</p>
+
+  <div class="feature-card">
+    <span class="feature-emoji">📜</span>
+    <div class="feature-text">
+      <div class="feature-title">Script-driven layout</div>
+      <div class="feature-desc">Write a script in DOCX with <code>[MM:SS]</code> timestamps and <code>/split start</code> / <code>/split end</code> directives. The editor reads these and builds the visual timeline automatically.</div>
+    </div>
+  </div>
+
+  <div class="feature-card">
+    <span class="feature-emoji">🎭</span>
+    <div class="feature-text">
+      <div class="feature-title">Darwin mascot + stock footage</div>
+      <div class="feature-desc">Upload one Darwin mascot video and your own stock clips. At each <code>/split</code>, the layout splits in half — stock on top, Darwin still talking on the bottom.</div>
+    </div>
+  </div>
+
+  <div class="feature-card">
+    <span class="feature-emoji">🎚️</span>
+    <div class="feature-text">
+      <div class="feature-title">Three-layer timeline</div>
+      <div class="feature-desc">Independent control of video stack, voiceover, and background music — drag, trim, delete, reorder.</div>
+    </div>
+  </div>
+
+  <div class="feature-card">
+    <span class="feature-emoji">💬</span>
+    <div class="feature-text">
+      <div class="feature-title">Editable on-screen captions</div>
+      <div class="feature-desc">Captions are pulled from your script. Edit text, change font family and size, drag to position. Adjustable per caption.</div>
+    </div>
+  </div>
+
+  <div class="feature-card">
+    <span class="feature-emoji">📐</span>
+    <div class="feature-text">
+      <div class="feature-title">Vertical 1080 × 1920 output</div>
+      <div class="feature-desc">Built for shorts, reels, and stories. Same fast render pipeline as the testimonial editor.</div>
+    </div>
+  </div>
+
+  <a class="back-link" href="home.html">← Back to all tools</a>
+</div>
+
+</body>
+</html>

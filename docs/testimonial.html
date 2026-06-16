@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Testimonial editor — projects</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/editor.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a href="home.html" class="topbar-brand">
+    <div class="topbar-logo">d</div>
+    <div class="topbar-title">Darwinbox MarkOps Tools</div>
+    <div class="topbar-subtitle">Testimonial Editor</div>
+  </a>
+  <div style="display:flex;gap:10px">
+    <a href="home.html" class="btn">← All tools</a>
+    <a href="upload.html" class="btn btn-primary">+ New project</a>
+  </div>
+</header>
+
+<main class="page-container">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">Your projects</h1>
+      <p class="page-subtitle">All testimonial videos. Click a project to continue editing or download.</p>
+    </div>
+  </div>
+
+  <div id="loadingState" style="text-align: center; padding: 60px 24px; color: #6b7280;">Loading projects…</div>
+  <div id="jobsList"></div>
+</main>
+
+<script src="js/api.js"></script>
+<script>
+  function fmtDate(iso) {
+    const d = new Date(iso);
+    const date = d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+    const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    return date + ', ' + time;
+  }
+  function statusLabel(s) {
+    return { editing: 'Editing', pending_render: 'Queued', rendering: 'Rendering', complete: 'Done', failed: 'Failed' }[s] || s;
+  }
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  async function render() {
+    document.getElementById('loadingState').style.display = 'block';
+    document.getElementById('jobsList').innerHTML = '';
+    try {
+      const projects = await API.listProjects();
+      document.getElementById('loadingState').style.display = 'none';
+      const list = document.getElementById('jobsList');
+
+      if (projects.length === 0) {
+        list.innerHTML = `
+          <div class="empty-state">
+            <h2 class="empty-state-title">No projects yet</h2>
+            <p class="empty-state-text">Upload a testimonial video and callouts DOCX to get started.</p>
+            <a href="upload.html" class="btn btn-primary">+ Create your first project</a>
+          </div>`;
+        return;
+      }
+
+      list.innerHTML = '<div class="cards-grid">' + projects.map(j => {
+        const title = (j.speaker && j.speaker.name) ? j.speaker.name : j.projectId;
+        const sub = (j.speaker && j.speaker.designation) ? j.speaker.designation : (j.introHeadline || '');
+        const status = j.status || 'editing';
+
+        let actions = '';
+        if (status === 'complete' && j.render && j.render.mp4Url) {
+          actions = `<a class="btn btn-primary" href="${j.render.mp4Url}" target="_blank">⬇ Download</a>
+                     <a class="btn" href="editor.html?projectId=${encodeURIComponent(j.projectId)}">Open</a>`;
+        } else if (status === 'rendering' || status === 'pending_render') {
+          actions = `<a class="btn" href="editor.html?projectId=${encodeURIComponent(j.projectId)}">View status</a>`;
+        } else if (status === 'failed') {
+          actions = `<a class="btn" href="editor.html?projectId=${encodeURIComponent(j.projectId)}">Retry</a>`;
+        } else {
+          actions = `<a class="btn btn-primary" href="editor.html?projectId=${encodeURIComponent(j.projectId)}">Edit</a>`;
+        }
+
+        return `
+          <div class="card">
+            <div class="card-thumb">
+              <div class="card-status ${status}">${statusLabel(status)}</div>
+            </div>
+            <div class="card-body">
+              <div class="card-title">${escapeHtml(title)} — ${fmtDate(j.updatedAt)}</div>
+              <div class="card-meta">${escapeHtml(sub)}</div>
+              <div class="card-actions">
+                ${actions}
+                <button class="btn" data-duplicate="${j.projectId}" title="Duplicate">⧉</button>
+                <button class="btn btn-danger" data-delete="${j.projectId}" title="Delete">✕</button>
+              </div>
+            </div>
+          </div>`;
+      }).join('') + '</div>';
+
+      list.querySelectorAll('[data-delete]').forEach(btn => {
+        btn.onclick = async (e) => {
+          e.preventDefault(); e.stopPropagation();
+          if (!confirm('Delete this project? This removes the video from S3 and project state. Cannot be undone.')) return;
+          btn.disabled = true; btn.textContent = '…';
+          try {
+            await API.deleteProject(btn.dataset.delete);
+            toast('Project deleted', 'success');
+            render();
+          } catch (err) {
+            console.error(err);
+            toast('Delete failed: ' + err.message, 'error');
+            btn.disabled = false; btn.textContent = '✕';
+          }
+        };
+      });
+
+      list.querySelectorAll('[data-duplicate]').forEach(btn => {
+        btn.onclick = async (e) => {
+          e.preventDefault(); e.stopPropagation();
+          btn.disabled = true; btn.textContent = '…';
+          try {
+            const dup = await API.duplicateProject(btn.dataset.duplicate);
+            toast('Duplicated as "' + ((dup.speaker && dup.speaker.name) || dup.projectId) + '"', 'success');
+            render();
+          } catch (err) {
+            console.error(err);
+            toast('Duplicate failed: ' + err.message, 'error');
+            btn.disabled = false; btn.textContent = '⧉';
+          }
+        };
+      });
+    } catch (e) {
+      console.error(e);
+      document.getElementById('loadingState').innerHTML =
+        '<div style="color: #f87171;">Could not load projects: ' + e.message + '</div>';
+    }
+  }
+
+  render();
+</script>
+
+</body>
+</html>
