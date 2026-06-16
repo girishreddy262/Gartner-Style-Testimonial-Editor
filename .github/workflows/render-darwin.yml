@@ -1,0 +1,99 @@
+name: Render Darwin Reel
+
+on:
+  repository_dispatch:
+    types: [render-darwin]
+  workflow_dispatch:
+    inputs:
+      payload_json_b64:
+        description: 'Base64-encoded payload JSON'
+        required: true
+        type: string
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install render-script deps
+        run: npm install --no-audit --no-fund
+        working-directory: scripts
+
+      - name: Decode payload
+        id: payload
+        env:
+          CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+          PAYLOAD_JSON_B64: ${{ inputs.payload_json_b64 }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -e
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            printf '%s' "$CLIENT_PAYLOAD" > raw-dispatch.json
+            IS_LARGE=$(jq -r '.large // false' raw-dispatch.json)
+            if [ "$IS_LARGE" = "true" ]; then
+              PAYLOAD_URL=$(jq -r '.payloadUrl' raw-dispatch.json)
+              HTTP_CODE=$(curl -sS -o render-payload.json -w "%{http_code}" "$PAYLOAD_URL")
+              if [ "$HTTP_CODE" != "200" ]; then echo "ERROR: payload fetch HTTP $HTTP_CODE"; head -c 1000 render-payload.json; exit 1; fi
+            else
+              cp raw-dispatch.json render-payload.json
+            fi
+          else
+            printf '%s' "$PAYLOAD_JSON_B64" | base64 -d > render-payload.json
+          fi
+          JOB_ID=$(jq -r '.jobId // .projectId // "unknown"' render-payload.json)
+          PROJECT_ID=$(jq -r '.projectId // .jobId // "unknown"' render-payload.json)
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "Decoded payload for job=$JOB_ID project=$PROJECT_ID"
+          jq '{jobId, projectId, segs:(.segments|length), caps:(.captions|length), totalDuration, hasDarwin:(.darwinUrl!=null), stock:(.stockUrls|length)}' render-payload.json
+
+      - name: Render via Remotion Lambda SDK
+        run: node render-darwin.mjs ../render-payload.json
+        working-directory: scripts
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          REMOTION_REGION: ap-south-1
+          REMOTION_FUNCTION_NAME: remotion-render-4-0-461-mem3008mb-disk5120mb-900sec
+          REMOTION_SERVE_URL: https://remotionlambda-apsouth1-9dlkcsayxl.s3.ap-south-1.amazonaws.com/sites/testimonial-editor/index.html
+
+      - name: Read render result
+        id: result
+        run: |
+          if [ ! -f "scripts/out/render-result.json" ]; then echo "mp4_url=" >> "$GITHUB_OUTPUT"; exit 1; fi
+          cat scripts/out/render-result.json
+          MP4_URL=$(jq -r '.mp4Url // ""' scripts/out/render-result.json)
+          echo "mp4_url=$MP4_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Write job status to S3
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ap-south-1
+          JOB_ID: ${{ steps.payload.outputs.job_id }}
+          JOB_STATUS: ${{ job.status }}
+          MP4_URL: ${{ steps.result.outputs.mp4_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BUCKET: darwinbox-gartner-testimonial-editor
+        run: |
+          set -e
+          KEY="job-status/${JOB_ID}.json"
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          if [ "$JOB_STATUS" = "success" ] && [ -n "$MP4_URL" ]; then
+            BODY=$(jq -n --arg jobId "$JOB_ID" --arg mp4Url "$MP4_URL" --arg completedAt "$NOW" --arg runUrl "$RUN_URL" \
+              '{status:"success", jobId:$jobId, mp4Url:$mp4Url, completedAt:$completedAt, runUrl:$runUrl}')
+          else
+            BODY=$(jq -n --arg jobId "$JOB_ID" --arg completedAt "$NOW" --arg runUrl "$RUN_URL" \
+              '{status:"failed", jobId:$jobId, completedAt:$completedAt, error:"Render failed — see GitHub Actions logs", logsUrl:$runUrl, runUrl:$runUrl}')
+          fi
+          echo "$BODY" | tee /tmp/status.json
+          aws s3 cp /tmp/status.json "s3://${BUCKET}/${KEY}" --content-type "application/json" --cache-control "no-cache, no-store"
