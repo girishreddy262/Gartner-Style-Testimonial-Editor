@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>New reel</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+<style>
+  .field { margin-bottom: 20px; }
+  .field-label {
+    font-size: 12px; font-weight: 700; color: #002B54;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; display: block;
+  }
+  .field-hint { font-size: 11px; color: #5B7795; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .text-input {
+    width: 100%; padding: 10px 12px; border: 1px solid #C7DCF0; border-radius: 8px;
+    font-family: inherit; font-size: 14px; color: #002B54; background: #fff;
+  }
+  .text-input:focus { outline: none; border-color: #0183FF; }
+  textarea.text-input { min-height: 160px; resize: vertical; font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.55; }
+
+  .stock-list { margin-bottom: 12px; }
+  .stock-item {
+    display: flex; align-items: center; gap: 10px; background: #fff;
+    border: 1px solid #DCEBFA; border-radius: 8px; padding: 8px 12px; margin-bottom: 6px; font-size: 13px;
+  }
+  .stock-idx { width: 22px; height: 22px; border-radius: 50%; background: #E1EFFF; color: #0166CC;
+    font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex: 0 0 22px; }
+  .stock-name { flex: 1; font-family: ui-monospace, Menlo, monospace; color: #003B73; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stock-ctrl { background: transparent; border: 0; color: #5B7795; cursor: pointer; font-size: 14px; padding: 2px 6px; }
+  .stock-ctrl:hover { color: #0183FF; }
+  .stock-ctrl.del:hover { color: #DC3545; }
+  .stock-ctrl:disabled { opacity: 0.3; cursor: default; }
+
+  .seg-tab-row { display: flex; gap: 0; margin-bottom: 10px; border: 1px solid #C7DCF0; border-radius: 8px; overflow: hidden; width: fit-content; }
+  .seg-tab { padding: 7px 16px; font-size: 12px; font-weight: 600; cursor: pointer; background: #fff; color: #5B7795; border: 0; }
+  .seg-tab.active { background: #0183FF; color: #fff; }
+
+  .pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pill { font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 12px; font-family: ui-monospace, Menlo, monospace; }
+  .pill.full-darwin { background: #EAF0F6; color: #5B7795; }
+  .pill.stock-top   { background: #E1EFFF; color: #0166CC; }
+  .pill.darwin-top  { background: #EDE4FF; color: #6B36D9; }
+  .pill.full-stock  { background: #D9F2EC; color: #0A7C6B; }
+  .warn { background: #FFF3D6; border: 1px solid #F4DFA8; color: #8A6212; font-size: 12px; padding: 8px 12px; border-radius: 6px; margin-top: 10px; }
+  .ok-note { color: #1B7A43; font-size: 12px; margin-top: 8px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <a class="topbar-brand" href="home.html">
+    <span class="topbar-logo">d</span>
+    <span class="topbar-title">Darwinbox MarkOps Tools</span>
+    <span class="topbar-subtitle">New Darwin reel</span>
+  </a>
+  <a href="darwin.html" class="btn">&larr; All reels</a>
+</div>
+
+<div class="page-container">
+  <div class="form-container">
+    <div class="page-header" style="display:block;margin-bottom:20px;">
+      <h1 class="page-title">New reel</h1>
+      <p class="page-subtitle">One continuous Darwin take, plus stock clips that take over the frame at each <code>/split</code>.</p>
+    </div>
+
+    <!-- name -->
+    <div class="field">
+      <label class="field-label" for="title">Reel title</label>
+      <input id="title" class="text-input" type="text" placeholder="e.g. BFSI compliance reel" />
+    </div>
+
+    <!-- darwin video -->
+    <div class="field">
+      <label class="field-label">Darwin video <span class="field-hint">the continuous take, vertical 1080&times;1920. Its audio is the narration.</span></label>
+      <div class="dropzone" id="dzDarwin">
+        <div class="dropzone-icon">&#127909;</div>
+        <div class="dropzone-title">Drop the Darwin video or click to choose</div>
+        <div class="dropzone-sub">MP4 / MOV</div>
+      </div>
+      <input type="file" id="fDarwin" accept="video/*" class="hidden" />
+    </div>
+
+    <!-- stock clips -->
+    <div class="field">
+      <label class="field-label">Stock clips <span class="field-hint">assigned to splits in order: clip 1 &rarr; first split, clip 2 &rarr; second&hellip;</span></label>
+      <div class="stock-list" id="stockList"></div>
+      <div class="dropzone" id="dzStock" style="padding:20px;">
+        <div class="dropzone-icon" style="font-size:24px;">&#10133;</div>
+        <div class="dropzone-title">Add stock clips</div>
+        <div class="dropzone-sub">select one or many; reorder below</div>
+      </div>
+      <input type="file" id="fStock" accept="video/*" multiple class="hidden" />
+    </div>
+
+    <!-- script -->
+    <div class="field">
+      <label class="field-label">Script <span class="field-hint">use <code>[MM:SS]</code> markers and <code>/split start</code> &middot; <code>/split end</code></span></label>
+      <div class="seg-tab-row">
+        <button class="seg-tab active" id="tabPaste" type="button">Paste text</button>
+        <button class="seg-tab" id="tabDocx" type="button">Upload DOCX</button>
+      </div>
+      <textarea id="scriptText" class="text-input" placeholder="[00:00]&#10;Welcome to the reel. This is full-frame Darwin talking.&#10;[00:06] /split start&#10;Now stock footage takes the top half while Darwin keeps talking below.&#10;[00:12] /split end&#10;Back to full Darwin to close."></textarea>
+      <div id="docxZone" class="hidden">
+        <div class="dropzone" id="dzDocx">
+          <div class="dropzone-icon">&#128196;</div>
+          <div class="dropzone-title">Drop the script DOCX or click to choose</div>
+          <div class="dropzone-sub">text is extracted and shown below</div>
+        </div>
+        <input type="file" id="fDocx" accept=".docx" class="hidden" />
+      </div>
+
+      <!-- live parse preview -->
+      <div class="preview-panel hidden" id="previewPanel">
+        <div class="preview-title" id="previewTitle">Parsed</div>
+        <div class="pills" id="segPills"></div>
+        <div id="parseNotes"></div>
+      </div>
+    </div>
+
+    <!-- music -->
+    <div class="field">
+      <label class="field-label">Background music <span class="field-hint">optional, plays low under the narration</span></label>
+      <div class="dropzone" id="dzMusic" style="padding:20px;">
+        <div class="dropzone-icon" style="font-size:24px;">&#127925;</div>
+        <div class="dropzone-title">Add music</div>
+        <div class="dropzone-sub">MP3 / WAV / M4A</div>
+      </div>
+      <input type="file" id="fMusic" accept="audio/*" class="hidden" />
+    </div>
+
+    <!-- upload progress -->
+    <div id="progressArea"></div>
+
+    <div class="form-actions">
+      <a href="darwin.html" class="btn">Cancel</a>
+      <button class="btn btn-primary" id="createBtn" disabled>Create reel</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<video id="probe" class="hidden" preload="metadata" muted></video>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="js/darwin-parser.js"></script>
+<script src="js/darwin-api.js"></script>
+<script>
+const state = {
+  darwinFile: null, darwinDuration: null,
+  stockFiles: [],
+  musicFile: null,
+  docxFile: null, scriptName: null,
+  scriptMode: 'paste',
+};
+
+const $ = (id) => document.getElementById(id);
+function toast(msg, kind = '') {
+  const t = $('toast'); t.textContent = msg; t.className = 'toast show ' + kind;
+  setTimeout(() => { t.className = 'toast ' + kind; }, 2800);
+}
+function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function fmtTime(sec){sec=Math.max(0,Math.round(sec||0));const m=Math.floor(sec/60),s=sec%60;return `${m}:${String(s).padStart(2,'0')}`;}
+
+// ── dropzone wiring helper ──────────────────────────────────────────────────
+function wireDrop(zoneId, inputId, onFiles) {
+  const zone = $(zoneId), input = $(inputId);
+  zone.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => { if (input.files.length) onFiles([...input.files]); input.value = ''; });
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault(); zone.classList.remove('dragover');
+    if (e.dataTransfer.files.length) onFiles([...e.dataTransfer.files]);
+  });
+}
+
+// ── Darwin video ────────────────────────────────────────────────────────────
+function readDuration(file) {
+  // Some MP4s report duration = Infinity until the browser is forced to scan to
+  // the end. The standard workaround: seek to a huge time, then read the
+  // now-finite duration on durationchange/timeupdate, then reset.
+  return new Promise((resolve) => {
+    const probe = $('probe');
+    let done = false;
+    const finish = (d) => { if (done) return; done = true; cleanup(); resolve(isFinite(d) && d > 0 ? d : null); };
+    const cleanup = () => { probe.onloadedmetadata = probe.ondurationchange = probe.ontimeupdate = probe.onerror = null; try { URL.revokeObjectURL(probe.src); } catch (_) {} };
+    probe.onloadedmetadata = () => {
+      if (isFinite(probe.duration) && probe.duration > 0) { finish(probe.duration); return; }
+      probe.ontimeupdate = () => { probe.ontimeupdate = null; probe.currentTime = 0; if (isFinite(probe.duration)) finish(probe.duration); };
+      probe.ondurationchange = () => { if (isFinite(probe.duration) && probe.duration > 0) finish(probe.duration); };
+      probe.currentTime = 1e101; // force the scan
+    };
+    probe.onerror = () => finish(NaN);
+    setTimeout(() => finish(probe.duration), 6000); // give up gracefully
+    probe.src = URL.createObjectURL(file);
+  });
+}
+wireDrop('dzDarwin', 'fDarwin', async (files) => {
+  state.darwinFile = files[0];
+  const dz = $('dzDarwin');
+  dz.classList.add('has-file');
+  dz.innerHTML = `<div class="dropzone-title"><span>&#9989;</span><span class="dropzone-filename">${escapeHtml(state.darwinFile.name)}</span>
+    <button class="dropzone-remove" id="rmDarwin" title="remove">&times;</button></div>
+    <div class="dropzone-meta" id="darwinMeta">reading duration&hellip;</div>`;
+  $('rmDarwin').onclick = (e) => { e.stopPropagation(); state.darwinFile = null; state.darwinDuration = null; resetDarwinDz(); refresh(); };
+  state.darwinDuration = await readDuration(state.darwinFile);
+  $('darwinMeta').textContent = state.darwinDuration ? `duration ${fmtTime(state.darwinDuration)}` : 'duration unknown (will finalize at render)';
+  refresh();
+});
+function resetDarwinDz() {
+  const dz = $('dzDarwin'); dz.classList.remove('has-file');
+  dz.innerHTML = `<div class="dropzone-icon">&#127909;</div><div class="dropzone-title">Drop the Darwin video or click to choose</div><div class="dropzone-sub">MP4 / MOV</div>`;
+}
+
+// ── Stock clips ───────────────────────────────────────────────────────────────
+wireDrop('dzStock', 'fStock', (files) => { state.stockFiles.push(...files); renderStock(); refresh(); });
+function renderStock() {
+  const list = $('stockList');
+  list.innerHTML = state.stockFiles.map((f, i) => `
+    <div class="stock-item">
+      <span class="stock-idx">${i + 1}</span>
+      <span class="stock-name">${escapeHtml(f.name)}</span>
+      <button class="stock-ctrl" title="up" onclick="moveStock(${i},-1)" ${i === 0 ? 'disabled' : ''}>&#9650;</button>
+      <button class="stock-ctrl" title="down" onclick="moveStock(${i},1)" ${i === state.stockFiles.length - 1 ? 'disabled' : ''}>&#9660;</button>
+      <button class="stock-ctrl del" title="remove" onclick="removeStock(${i})">&times;</button>
+    </div>`).join('');
+}
+function moveStock(i, dir) {
+  const j = i + dir; if (j < 0 || j >= state.stockFiles.length) return;
+  [state.stockFiles[i], state.stockFiles[j]] = [state.stockFiles[j], state.stockFiles[i]];
+  renderStock(); refresh();
+}
+function removeStock(i) { state.stockFiles.splice(i, 1); renderStock(); refresh(); }
+
+// ── Music ─────────────────────────────────────────────────────────────────────
+wireDrop('dzMusic', 'fMusic', (files) => {
+  state.musicFile = files[0];
+  const dz = $('dzMusic'); dz.classList.add('has-file');
+  dz.innerHTML = `<div class="dropzone-title"><span>&#9989;</span><span class="dropzone-filename">${escapeHtml(state.musicFile.name)}</span>
+    <button class="dropzone-remove" id="rmMusic" title="remove">&times;</button></div>`;
+  $('rmMusic').onclick = (e) => { e.stopPropagation(); state.musicFile = null;
+    dz.classList.remove('has-file');
+    dz.innerHTML = `<div class="dropzone-icon" style="font-size:24px;">&#127925;</div><div class="dropzone-title">Add music</div><div class="dropzone-sub">MP3 / WAV / M4A</div>`; };
+});
+
+// ── Script: paste / docx tabs ──────────────────────────────────────────────────
+$('tabPaste').onclick = () => { state.scriptMode = 'paste'; $('tabPaste').classList.add('active'); $('tabDocx').classList.remove('active'); $('scriptText').classList.remove('hidden'); $('docxZone').classList.add('hidden'); refresh(); };
+$('tabDocx').onclick = () => { state.scriptMode = 'docx'; $('tabDocx').classList.add('active'); $('tabPaste').classList.remove('active'); $('docxZone').classList.remove('hidden'); $('scriptText').classList.remove('hidden'); refresh(); };
+$('scriptText').addEventListener('input', refresh);
+wireDrop('dzDocx', 'fDocx', async (files) => {
+  state.docxFile = files[0]; state.scriptName = state.docxFile.name;
+  const dz = $('dzDocx'); dz.classList.add('has-file');
+  dz.innerHTML = `<div class="dropzone-title"><span>&#9989;</span><span class="dropzone-filename">${escapeHtml(state.docxFile.name)}</span></div><div class="dropzone-meta">extracting&hellip;</div>`;
+  try {
+    const buf = await state.docxFile.arrayBuffer();
+    const res = await window.mammoth.extractRawText({ arrayBuffer: buf });
+    $('scriptText').value = res.value || '';
+    dz.querySelector('.dropzone-meta').textContent = `${(res.value || '').split(/\r?\n/).filter(Boolean).length} lines extracted`;
+  } catch (e) { dz.querySelector('.dropzone-meta').textContent = 'extract failed: ' + e.message; }
+  refresh();
+});
+
+// ── Live parse preview ──────────────────────────────────────────────────────────
+function currentScript() { return $('scriptText').value || ''; }
+function refresh() {
+  const script = currentScript().trim();
+  const panel = $('previewPanel');
+  if (script) {
+    const parsed = parseDarwinScript(script, { totalDuration: state.darwinDuration || null });
+    const segs = buildRenderPlan(parsed, { totalDuration: state.darwinDuration || 0, defaultLayout: 'stock-top' });
+    panel.classList.remove('hidden');
+    $('previewTitle').textContent = `Parsed: ${segs.length} segment${segs.length === 1 ? '' : 's'}, ${parsed.captions.length} caption${parsed.captions.length === 1 ? '' : 's'}`;
+    $('segPills').innerHTML = segs.map(s =>
+      `<span class="pill ${s.layout}">${s.layout} ${fmtTime(s.start)}\u2013${fmtTime(s.end)}</span>`).join('');
+    const notes = [];
+    (parsed.warnings || []).forEach(w => notes.push(`<div class="warn">${escapeHtml(w)}</div>`));
+    const need = parsed.stockClipsNeeded, have = state.stockFiles.length;
+    if (need > have) notes.push(`<div class="warn">Script needs ${need} stock clip${need === 1 ? '' : 's'} but ${have} uploaded. Missing splits render a placeholder.</div>`);
+    else if (need > 0) notes.push(`<div class="ok-note">${have} stock clip${have === 1 ? '' : 's'} for ${need} split${need === 1 ? '' : 's'}.</div>`);
+    $('parseNotes').innerHTML = notes.join('');
+  } else { panel.classList.add('hidden'); }
+  $('createBtn').disabled = !($('title').value.trim() && state.darwinFile && script);
+}
+$('title').addEventListener('input', refresh);
+
+// ── Create + upload orchestration ─────────────────────────────────────────────
+function addProgressRow(id, name) {
+  const row = document.createElement('div'); row.className = 'progress-row'; row.id = 'pr-' + id;
+  row.innerHTML = `<span class="progress-name">${escapeHtml(name)}</span><div class="progress-bar"><div class="progress-fill" id="pf-${id}"></div></div><span class="progress-pct" id="pp-${id}">0%</span>`;
+  $('progressArea').appendChild(row); return row;
+}
+function setProgress(id, pct) { const f = $('pf-' + id), p = $('pp-' + id); if (f) f.style.width = pct + '%'; if (p) p.textContent = pct + '%'; }
+
+$('createBtn').onclick = async () => {
+  const btn = $('createBtn'); btn.disabled = true; btn.textContent = 'Creating\u2026';
+  $('progressArea').innerHTML = '';
+  try {
+    const title = $('title').value.trim();
+    const project = await DarwinAPI.create(title);
+    const id = project.projectId;
+
+    // 1. Darwin video
+    addProgressRow('darwin', state.darwinFile.name);
+    const darwinS3Key = await DarwinAPI.uploadFile(id, 'darwin', state.darwinFile, p => setProgress('darwin', p));
+    setProgress('darwin', 100);
+
+    // 2. Stock clips, in order
+    const stockS3Keys = [], stockNames = [];
+    for (let i = 0; i < state.stockFiles.length; i++) {
+      const f = state.stockFiles[i];
+      addProgressRow('stock' + i, `stock ${i + 1}: ${f.name}`);
+      const key = await DarwinAPI.uploadFile(id, 'stock', f, p => setProgress('stock' + i, p));
+      setProgress('stock' + i, 100);
+      stockS3Keys.push(key); stockNames.push(f.name);
+    }
+
+    // 3. Music (optional)
+    let musicS3Key = null, musicName = null;
+    if (state.musicFile) {
+      addProgressRow('music', state.musicFile.name);
+      musicS3Key = await DarwinAPI.uploadFile(id, 'music', state.musicFile, p => setProgress('music', p));
+      setProgress('music', 100); musicName = state.musicFile.name;
+    }
+
+    // 4. Script DOCX (optional archival upload)
+    let scriptName = state.scriptName || null;
+    if (state.docxFile) {
+      try { await DarwinAPI.uploadFile(id, 'script', state.docxFile); } catch (_) { /* non-fatal */ }
+    }
+
+    // 5. Persist everything on the project
+    btn.textContent = 'Saving\u2026';
+    await DarwinAPI.update(id, {
+      darwinS3Key, darwinName: state.darwinFile.name,
+      stockS3Keys, stockNames,
+      musicS3Key, musicName,
+      scriptText: currentScript(), scriptName,
+      totalDuration: state.darwinDuration || 0,
+      defaultLayout: 'stock-top', musicVolume: 0.15,
+    });
+
+    // 6. Parse (server is the source of truth for segments/captions)
+    btn.textContent = 'Parsing\u2026';
+    await DarwinAPI.parse(id, {});
+
+    // 7. Into the editor
+    btn.textContent = 'Opening editor\u2026';
+    window.location.href = `darwin-editor.html?id=${encodeURIComponent(id)}`;
+  } catch (e) {
+    toast('Create failed: ' + e.message, 'error');
+    btn.disabled = false; btn.textContent = 'Create reel';
+  }
+};
+
+refresh();
+</script>
+</body>
+</html>

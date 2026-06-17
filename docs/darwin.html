@@ -3,78 +3,37 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Darwin Reel Editor — Coming Soon</title>
+<title>Darwin Reel Editor</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/styles.css">
 <style>
-  .coming-wrap {
-    max-width: 720px;
-    margin: 0 auto;
-    padding: 56px 24px;
-    text-align: center;
-  }
-  .coming-icon {
-    width: 64px;
-    height: 64px;
-    border-radius: 14px;
-    background: linear-gradient(135deg, #7C3AED, #4338CA);
-    display: inline-flex;
+  /* Reels are vertical: override the shared 16/9 thumb to 9/16. */
+  .card-thumb.reel {
+    aspect-ratio: 9 / 16;
+    background:
+      #EDF6FF
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 56 100'><rect fill='%230183FF' opacity='0.07' width='56' height='100'/><circle cx='28' cy='34' r='10' fill='%230183FF' opacity='0.22'/><path d='M10 74 Q10 54, 28 54 Q46 54, 46 74 Z' fill='%230183FF' opacity='0.22'/></svg>")
+      center/cover no-repeat;
+    display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 32px;
-    color: #fff;
-    margin-bottom: 20px;
   }
-  .coming-title {
-    font-size: 32px;
-    font-weight: 700;
-    color: #002B54;
-    margin: 0 0 8px;
-    letter-spacing: -0.02em;
+  .card-thumb.reel video {
+    width: 100%; height: 100%; object-fit: cover; display: block;
   }
-  .coming-sub {
-    font-size: 14px;
-    color: #5B7795;
-    margin: 0 0 32px;
+  .play-badge {
+    position: absolute; inset: 0; margin: auto;
+    width: 44px; height: 44px; border-radius: 50%;
+    background: rgba(1,131,255,0.9); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; pointer-events: none;
   }
-  .feature-card {
-    background: #FFFFFF;
-    border: 1px solid #DCEBFA;
-    border-radius: 12px;
-    padding: 20px 22px;
-    margin: 12px 0;
-    text-align: left;
-    display: flex;
-    gap: 16px;
-    align-items: flex-start;
+  /* tighten the grid for narrow cards */
+  .cards-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  .card-icon-btn {
+    width: 30px; flex: 0 0 30px !important; padding: 5px 0 !important;
   }
-  .feature-emoji {
-    font-size: 22px;
-    line-height: 1;
-    margin-top: 2px;
-  }
-  .feature-text { flex: 1; }
-  .feature-title {
-    font-size: 14px;
-    font-weight: 700;
-    color: #002B54;
-    margin: 0 0 4px;
-  }
-  .feature-desc {
-    font-size: 13px;
-    color: #5B7795;
-    line-height: 1.5;
-    margin: 0;
-  }
-  .back-link {
-    display: inline-block;
-    margin-top: 32px;
-    color: #0183FF;
-    text-decoration: none;
-    font-size: 13px;
-    font-weight: 600;
-  }
-  .back-link:hover { text-decoration: underline; }
+  .loading-note { text-align:center; color:#5B7795; font-size:13px; padding:60px 0; }
 </style>
 </head>
 <body>
@@ -83,57 +42,134 @@
   <a class="topbar-brand" href="home.html">
     <span class="topbar-logo">d</span>
     <span class="topbar-title">Darwinbox MarkOps Tools</span>
+    <span class="topbar-subtitle">Darwin Reel Editor</span>
   </a>
-  <a href="home.html" class="btn">← Back to hub</a>
+  <a href="home.html" class="btn">&larr; Back to hub</a>
 </div>
 
-<div class="coming-wrap">
-  <div class="coming-icon">✨</div>
-  <h1 class="coming-title">Darwin Reel Editor</h1>
-  <p class="coming-sub">In development. Here's what's coming.</p>
-
-  <div class="feature-card">
-    <span class="feature-emoji">📜</span>
-    <div class="feature-text">
-      <div class="feature-title">Script-driven layout</div>
-      <div class="feature-desc">Write a script in DOCX with <code>[MM:SS]</code> timestamps and <code>/split start</code> / <code>/split end</code> directives. The editor reads these and builds the visual timeline automatically.</div>
+<div class="page-container">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">Darwin Reels</h1>
+      <p class="page-subtitle">Vertical 1080 &times; 1920 reels. Script-driven splits over a continuous Darwin take.</p>
     </div>
+    <a href="darwin-upload.html" class="btn btn-primary">+ New reel</a>
   </div>
 
-  <div class="feature-card">
-    <span class="feature-emoji">🎭</span>
-    <div class="feature-text">
-      <div class="feature-title">Darwin mascot + stock footage</div>
-      <div class="feature-desc">Upload one Darwin mascot video and your own stock clips. At each <code>/split</code>, the layout splits in half — stock on top, Darwin still talking on the bottom.</div>
-    </div>
+  <div id="content">
+    <div class="loading-note">Loading reels&hellip;</div>
   </div>
-
-  <div class="feature-card">
-    <span class="feature-emoji">🎚️</span>
-    <div class="feature-text">
-      <div class="feature-title">Three-layer timeline</div>
-      <div class="feature-desc">Independent control of video stack, voiceover, and background music — drag, trim, delete, reorder.</div>
-    </div>
-  </div>
-
-  <div class="feature-card">
-    <span class="feature-emoji">💬</span>
-    <div class="feature-text">
-      <div class="feature-title">Editable on-screen captions</div>
-      <div class="feature-desc">Captions are pulled from your script. Edit text, change font family and size, drag to position. Adjustable per caption.</div>
-    </div>
-  </div>
-
-  <div class="feature-card">
-    <span class="feature-emoji">📐</span>
-    <div class="feature-text">
-      <div class="feature-title">Vertical 1080 × 1920 output</div>
-      <div class="feature-desc">Built for shorts, reels, and stories. Same fast render pipeline as the testimonial editor.</div>
-    </div>
-  </div>
-
-  <a class="back-link" href="home.html">← Back to all tools</a>
 </div>
 
+<div class="toast" id="toast"></div>
+
+<script src="js/darwin-api.js"></script>
+<script>
+const content = document.getElementById('content');
+
+function toast(msg, kind = '') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + kind;
+  setTimeout(() => { t.className = 'toast ' + kind; }, 2600);
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
+    ', ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+function fmtDur(sec) {
+  sec = Math.round(sec || 0);
+  if (!sec) return '';
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m ? `${m}:${String(s).padStart(2, '0')}` : `${s}s`;
+}
+
+function statusLabel(st) {
+  return ({ editing: 'Editing', rendering: 'Rendering', complete: 'Ready',
+            failed: 'Failed', pending_render: 'Queued' }[st] || st || 'Editing');
+}
+
+function metaLine(p) {
+  const bits = [];
+  if (p.totalDuration) bits.push(fmtDur(p.totalDuration));
+  const segN = (p.segments || []).length;
+  if (segN) bits.push(`${segN} segment${segN === 1 ? '' : 's'}`);
+  const splitN = (p.segments || []).filter(s => s.layout && s.layout !== 'full-darwin').length;
+  if (splitN) bits.push(`${splitN} split${splitN === 1 ? '' : 's'}`);
+  bits.push(fmtDate(p.updatedAt || p.createdAt));
+  return bits.join(' \u00b7 ');
+}
+
+function cardHTML(p) {
+  const st = p.status || 'editing';
+  const isDone = st === 'complete' && p.render && p.render.mp4Url;
+  const thumb = isDone
+    ? `<video src="${escapeHtml(p.render.mp4Url)}" muted preload="metadata"></video><div class="play-badge">&#9658;</div>`
+    : '';
+  const dl = isDone
+    ? `<a class="btn" href="${escapeHtml(p.render.mp4Url)}" download onclick="event.stopPropagation()">Download</a>`
+    : '';
+  return `
+    <div class="card" data-id="${escapeHtml(p.projectId)}" onclick="openEditor('${escapeHtml(p.projectId)}')">
+      <div class="card-thumb reel">
+        ${thumb}
+        <span class="card-status ${st}">${statusLabel(st)}</span>
+      </div>
+      <div class="card-body">
+        <div class="card-title" title="${escapeHtml(p.title)}">${escapeHtml(p.title || 'Untitled reel')}</div>
+        <div class="card-meta">${escapeHtml(metaLine(p))}</div>
+        <div class="card-actions">
+          <a class="btn" href="darwin-editor.html?id=${encodeURIComponent(p.projectId)}" onclick="event.stopPropagation()">Edit</a>
+          ${dl}
+          <button class="btn card-icon-btn" title="Duplicate" onclick="event.stopPropagation();dup('${escapeHtml(p.projectId)}')">&#9092;</button>
+          <button class="btn btn-danger card-icon-btn" title="Delete" onclick="event.stopPropagation();del('${escapeHtml(p.projectId)}','${escapeHtml(p.title)}')">&times;</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function emptyHTML() {
+  return `
+    <div class="empty-state">
+      <div class="empty-state-title">No reels yet</div>
+      <div class="empty-state-text">Create your first vertical reel from a Darwin take, stock clips, and a script.</div>
+      <a href="darwin-upload.html" class="btn btn-primary">+ New reel</a>
+    </div>`;
+}
+
+async function load() {
+  try {
+    const projects = await DarwinAPI.list();
+    if (!projects.length) { content.innerHTML = emptyHTML(); return; }
+    content.innerHTML = `<div class="cards-grid">${projects.map(cardHTML).join('')}</div>`;
+  } catch (e) {
+    content.innerHTML = `<div class="empty-state"><div class="empty-state-title">Could not load reels</div><div class="empty-state-text">${escapeHtml(e.message)}</div></div>`;
+  }
+}
+
+function openEditor(id) { window.location.href = `darwin-editor.html?id=${encodeURIComponent(id)}`; }
+
+async function dup(id) {
+  try { toast('Duplicating\u2026'); await DarwinAPI.duplicate(id); await load(); toast('Duplicated', 'success'); }
+  catch (e) { toast('Duplicate failed: ' + e.message, 'error'); }
+}
+
+async function del(id, title) {
+  if (!confirm(`Delete "${title || 'this reel'}"? This cannot be undone.`)) return;
+  try { await DarwinAPI.remove(id); await load(); toast('Deleted', 'success'); }
+  catch (e) { toast('Delete failed: ' + e.message, 'error'); }
+}
+
+load();
+</script>
 </body>
 </html>

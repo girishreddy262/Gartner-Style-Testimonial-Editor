@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Darwin Reel Editor</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: #151516; color: #EDF6FF; overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; font-size: 13px; }
+  .hidden { display: none !important; }
+  kbd { background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 3px; font-size: 10px; }
+
+  /* ── layout shell ── */
+  .app { height: 100%; display: grid; grid-template-rows: 50px 1fr 200px; }
+  .topbar { background: #1f1f22; border-bottom: 1px solid #2a2a2e; padding: 0 16px; display: flex; align-items: center; gap: 12px; }
+  .topbar-brand { display: flex; align-items: center; gap: 9px; text-decoration: none; color: #EDF6FF; }
+  .topbar-logo { width: 26px; height: 26px; background: #003B73; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-family: serif; }
+  .topbar-title { font-size: 13px; font-weight: 600; }
+  .topbar-name { font-size: 12px; color: #94a3b8; }
+  .spacer { flex: 1; }
+  .btn { background: #232327; color: #EDF6FF; border: 1px solid #383840; padding: 7px 13px; border-radius: 6px; font: inherit; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+  .btn:hover { background: #2e2e32; }
+  .btn.primary { background: #0183FF; border-color: #0183FF; color: #fff; font-weight: 600; }
+  .btn.primary:hover { background: #0166CC; }
+  .btn.primary:disabled { background: #2a4a6a; border-color: #2a4a6a; color: #88a; cursor: default; }
+  .btn.ghost { background: transparent; border-color: transparent; color: #94a3b8; }
+  .btn.ghost:hover { background: #232327; color: #EDF6FF; }
+  .btn.sm { padding: 4px 8px; font-size: 11px; }
+  .status-pill { font-size: 11px; padding: 3px 10px; border-radius: 10px; font-weight: 600; }
+  .status-pill.editing { background: rgba(1,131,255,0.15); color: #66B0FF; }
+  .status-pill.rendering { background: rgba(247,181,56,0.16); color: #F7B538; }
+  .status-pill.complete { background: rgba(46,184,114,0.16); color: #4ADE80; }
+  .status-pill.failed { background: rgba(239,68,68,0.16); color: #F87171; }
+
+  .body { display: grid; grid-template-columns: 252px 1fr 268px; min-height: 0; }
+  .rail { background: #1a1a1c; overflow-y: auto; padding: 14px 0; }
+  .rail.left { border-right: 1px solid #2a2a2e; }
+  .rail.right { border-left: 1px solid #2a2a2e; }
+  .rail-title { padding: 0 14px 8px; font-size: 10px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; }
+  .rail-sec { margin-bottom: 18px; }
+  .asset-row { margin: 0 14px 8px; background: #232327; border: 1px solid #2a2a2e; border-radius: 7px; padding: 9px 10px; }
+  .asset-row .name { font-size: 12px; color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, Menlo, monospace; }
+  .asset-row .sub { font-size: 10px; color: #6b7280; margin-top: 2px; }
+  .asset-actions { display: flex; gap: 5px; margin-top: 7px; }
+  .stock-row { display: flex; align-items: center; gap: 8px; margin: 0 14px 6px; background: #232327; border: 1px solid #2a2a2e; border-radius: 7px; padding: 7px 9px; }
+  .stock-row.active { border-color: #0183FF; }
+  .stock-idx { width: 20px; height: 20px; border-radius: 50%; background: rgba(1,131,255,0.15); color: #66B0FF; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex: 0 0 20px; }
+  .stock-row .name { flex: 1; font-size: 11px; color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, Menlo, monospace; }
+  .icon-btn { background: transparent; border: 0; color: #6b7280; cursor: pointer; font-size: 13px; padding: 2px 4px; }
+  .icon-btn:hover { color: #66B0FF; }
+  .icon-btn.del:hover { color: #F87171; }
+  .icon-btn:disabled { opacity: 0.3; cursor: default; }
+  textarea.script { width: calc(100% - 28px); margin: 0 14px; min-height: 150px; resize: vertical; background: #131316; color: #cbd5e1; border: 1px solid #2a2a2e; border-radius: 7px; padding: 9px; font-family: ui-monospace, Menlo, monospace; font-size: 11px; line-height: 1.55; }
+  textarea.script:focus { outline: none; border-color: #0183FF; }
+
+  /* ── stage / preview ── */
+  .stage { display: flex; flex-direction: column; min-width: 0; background: #151516; }
+  .stage-pad { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 14px; }
+  .frame { position: relative; aspect-ratio: 1080 / 1920; height: min(100%, 560px); background: #000; border-radius: 10px; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,0.5); }
+  .frame video { position: absolute; background: #000; }
+  .frame .ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #3a4654; font-family: monospace; font-size: 13px; background: #11161d; }
+  .frame .cap { position: absolute; left: 6%; right: 6%; display: flex; justify-content: center; pointer-events: none; }
+  .frame .cap span { background: rgba(0,0,0,0.55); border-radius: 10px; color: #fff; text-align: center; line-height: 1.25; padding: 2.2% 4%; max-width: 88%; }
+  .edge { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: rgba(255,255,255,0.18); pointer-events: none; z-index: 5; }
+
+  .transport { display: flex; align-items: center; gap: 14px; padding: 9px 16px; border-top: 1px solid #2a2a2e; background: #18181b; }
+  .play-btn { width: 34px; height: 34px; border-radius: 50%; background: #0183FF; border: 0; color: #fff; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .play-btn:hover { background: #0166CC; }
+  .time-read { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #94a3b8; }
+  .seg-read { font-size: 11px; color: #6b7280; }
+
+  /* ── inspector ── */
+  .insp-empty { padding: 28px 16px; color: #6b7280; font-size: 12px; text-align: center; }
+  .insp-sec { padding: 0 16px 16px; }
+  .insp-h { font-size: 11px; color: #cbd5e1; font-weight: 700; margin: 14px 0 4px; }
+  .insp-meta { font-size: 11px; color: #6b7280; margin-bottom: 10px; }
+  .layout-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .layout-opt { background: #232327; border: 1px solid #2a2a2e; border-radius: 8px; padding: 8px; cursor: pointer; text-align: center; }
+  .layout-opt:hover { border-color: #383840; background: #2a2a2e; }
+  .layout-opt.active { border-color: #0183FF; background: rgba(1,131,255,0.1); }
+  .layout-ico { width: 30px; height: 53px; margin: 0 auto 6px; border-radius: 3px; overflow: hidden; border: 1px solid #383840; display: flex; flex-direction: column; }
+  .layout-ico div { flex: 1; }
+  .layout-ico .d { background: #0183FF; }
+  .layout-ico .s { background: #0A7C6B; }
+  .layout-name { font-size: 10px; color: #cbd5e1; }
+  .layout-opt.active .layout-name { color: #66B0FF; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 10px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; font-weight: 700; }
+  .field input[type=range] { width: 100%; }
+  .field .val { font-size: 11px; color: #94a3b8; font-family: ui-monospace, Menlo, monospace; }
+
+  /* ── timeline ── */
+  .timeline { background: #18181b; border-top: 1px solid #2a2a2e; display: flex; flex-direction: column; min-height: 0; }
+  .tl-toolbar { display: flex; align-items: center; gap: 10px; padding: 6px 14px; border-bottom: 1px solid #232327; }
+  .tl-toolbar .lbl { font-size: 10px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; }
+  .tl-scroll { flex: 1; overflow-x: auto; overflow-y: hidden; position: relative; }
+  .tl-inner { position: relative; min-width: 100%; }
+  .tl-ruler { height: 22px; position: relative; border-bottom: 1px solid #232327; cursor: pointer; }
+  .tl-tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid #2a2a2e; padding-left: 4px; font-size: 9px; color: #6b7280; font-family: ui-monospace, Menlo, monospace; }
+  .tl-row { height: 42px; display: flex; align-items: stretch; border-bottom: 1px solid #1f1f22; position: relative; }
+  .tl-rowlabel { position: sticky; left: 0; z-index: 6; width: 78px; flex: 0 0 78px; background: #1a1a1c; border-right: 1px solid #232327; display: flex; align-items: center; padding: 0 10px; font-size: 10px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+  .tl-lane { position: relative; flex: 1; }
+  .tl-block { position: absolute; top: 5px; bottom: 5px; border-radius: 4px; cursor: pointer; overflow: hidden; display: flex; align-items: center; padding: 0 7px; font-size: 10px; color: #fff; white-space: nowrap; }
+  .tl-block.full-darwin { background: #2b3340; color: #94a3b8; border: 1px solid #384150; }
+  .tl-block.stock-top { background: rgba(1,131,255,0.32); border: 1px solid #0183FF; }
+  .tl-block.darwin-top { background: rgba(124,58,237,0.32); border: 1px solid #7C3AED; }
+  .tl-block.full-stock { background: rgba(10,124,107,0.4); border: 1px solid #0A7C6B; }
+  .tl-block.selected { box-shadow: 0 0 0 2px #fff inset; }
+  .tl-block.narr { background: rgba(1,131,255,0.16); border: 1px solid #2a557f; color: #66B0FF; top: 8px; bottom: 8px; }
+  .tl-block.music { background: rgba(247,181,56,0.16); border: 1px solid #6b5520; color: #F7B538; top: 10px; bottom: 10px; }
+  .tl-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #FC6A6B; z-index: 8; pointer-events: none; box-shadow: 0 0 6px rgba(252,106,107,0.6); }
+  .tl-playhead-grip { position: absolute; top: 0; width: 11px; height: 22px; margin-left: -5px; background: transparent; cursor: ew-resize; z-index: 9; }
+
+  .toast { position: fixed; bottom: 18px; right: 18px; background: #232327; border: 1px solid #383840; color: #EDF6FF; padding: 10px 16px; border-radius: 8px; font-size: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); z-index: 100; opacity: 0; transform: translateY(8px); transition: all .2s; }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.error { border-color: #7f2a2a; }
+  .toast.success { border-color: #2a7f4a; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- TOPBAR -->
+  <div class="topbar">
+    <a class="topbar-brand" href="darwin.html"><span class="topbar-logo">d</span><span class="topbar-title">Darwin Reel Editor</span></a>
+    <span class="topbar-name" id="reelName"></span>
+    <div class="spacer"></div>
+    <span class="status-pill editing" id="statusPill">Editing</span>
+    <a href="darwin.html" class="btn ghost">All reels</a>
+    <a class="btn hidden" id="dlBtn" download>Download MP4</a>
+    <button class="btn primary" id="renderBtn">Render</button>
+  </div>
+
+  <!-- BODY -->
+  <div class="body">
+    <!-- LEFT RAIL: assets + script -->
+    <div class="rail left">
+      <div class="rail-sec">
+        <div class="rail-title">Darwin video</div>
+        <div class="asset-row">
+          <div class="name" id="darwinName">none</div>
+          <div class="sub" id="darwinSub"></div>
+          <div class="asset-actions">
+            <button class="btn sm" id="swapDarwin">Swap video</button>
+          </div>
+        </div>
+        <input type="file" id="fDarwin" accept="video/*" class="hidden" />
+      </div>
+
+      <div class="rail-sec">
+        <div class="rail-title">Stock clips <span id="stockCount" style="color:#6b7280"></span></div>
+        <div id="stockList"></div>
+        <button class="btn sm" id="addStock" style="margin:2px 14px;">+ Add stock</button>
+        <input type="file" id="fStock" accept="video/*" multiple class="hidden" />
+        <input type="file" id="fSwapStock" accept="video/*" class="hidden" />
+      </div>
+
+      <div class="rail-sec">
+        <div class="rail-title">Music</div>
+        <div class="asset-row">
+          <div class="name" id="musicName">none</div>
+          <div class="asset-actions">
+            <button class="btn sm" id="swapMusic">Set music</button>
+            <button class="btn sm hidden" id="rmMusic">Remove</button>
+          </div>
+        </div>
+        <input type="file" id="fMusic" accept="audio/*" class="hidden" />
+      </div>
+
+      <div class="rail-sec">
+        <div class="rail-title">Script <span style="color:#6b7280">re-parses live</span></div>
+        <textarea class="script" id="scriptText" spellcheck="false"></textarea>
+      </div>
+    </div>
+
+    <!-- STAGE: preview -->
+    <div class="stage">
+      <div class="stage-pad">
+        <div class="frame" id="frame">
+          <video id="darwinVid" muted playsinline></video>
+          <video id="stockVid" muted playsinline></video>
+          <div class="edge" id="edge"></div>
+          <div class="cap hidden" id="capBar"><span id="capText"></span></div>
+        </div>
+      </div>
+      <div class="transport">
+        <button class="play-btn" id="playBtn">&#9658;</button>
+        <span class="time-read" id="timeRead">0:00 / 0:00</span>
+        <span class="seg-read" id="segRead"></span>
+        <div class="spacer"></div>
+        <label class="seg-read" style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="loopChk" /> loop</label>
+      </div>
+    </div>
+
+    <!-- RIGHT RAIL: inspector -->
+    <div class="rail right" id="inspector"></div>
+  </div>
+
+  <!-- TIMELINE -->
+  <div class="timeline">
+    <div class="tl-toolbar">
+      <span class="lbl">Timeline</span>
+      <button class="btn ghost sm" id="zoomOut">&#8722;</button>
+      <button class="btn ghost sm" id="zoomIn">+</button>
+      <span class="seg-read" id="tlHint">click a split block to change its layout</span>
+    </div>
+    <div class="tl-scroll" id="tlScroll">
+      <div class="tl-inner" id="tlInner"></div>
+    </div>
+  </div>
+</div>
+
+<audio id="musicAud"></audio>
+<div class="toast" id="toast"></div>
+
+<script src="js/darwin-parser.js"></script>
+<script src="js/darwin-api.js"></script>
+<script>
+// =============================================================================
+// State
+// =============================================================================
+const qs = new URLSearchParams(location.search);
+const PROJECT_ID = qs.get('id');
+const $ = (id) => document.getElementById(id);
+
+const state = {
+  project: null,
+  darwinUrl: null, stockUrls: [], musicUrl: null,
+  segments: [], captions: [],
+  selectedSplit: null,        // stockIndex of the selected split, or null
+  pxPerSec: 56,
+  playing: false,
+  saveTimer: null,
+  pollTimer: null,
+};
+
+function toast(msg, kind = '') { const t = $('toast'); t.textContent = msg; t.className = 'toast show ' + kind; setTimeout(() => t.className = 'toast ' + kind, 2600); }
+function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function fmtTime(sec){sec=Math.max(0,sec||0);const m=Math.floor(sec/60),s=Math.floor(sec%60);return `${m}:${String(s).padStart(2,'0')}`;}
+
+const p = () => state.project;
+const total = () => p()?.totalDuration || state.segments[state.segments.length-1]?.end || 0;
+
+// =============================================================================
+// Load
+// =============================================================================
+async function boot() {
+  if (!PROJECT_ID) { document.body.innerHTML = '<div style="padding:40px;color:#94a3b8">No reel id in URL.</div>'; return; }
+  try {
+    state.project = await DarwinAPI.get(PROJECT_ID);
+  } catch (e) { document.body.innerHTML = `<div style="padding:40px;color:#F87171">Could not load reel: ${escapeHtml(e.message)}</div>`; return; }
+
+  $('reelName').textContent = p().title || 'Untitled reel';
+  $('scriptText').value = p().scriptText || '';
+  setStatus(p().status || 'editing');
+
+  await resolveAssetUrls();
+  rebuildSegments();
+  renderAssets();
+  renderTimeline();
+  renderInspector();
+  wireMedia();
+  // Backfill duration if missing, once the darwin video reports metadata.
+  maybeBackfillDuration();
+  paint(); // draw frame 0 (sets edge visibility, time readout, playhead) before first play
+  if (p().status === 'rendering') startPolling();
+}
+
+async function resolveAssetUrls() {
+  const proj = p();
+  state.darwinUrl = await safeAssetUrl(proj.darwinS3Key);
+  state.stockUrls = [];
+  for (const k of (proj.stockS3Keys || [])) state.stockUrls.push(await safeAssetUrl(k));
+  state.musicUrl = proj.musicS3Key ? await safeAssetUrl(proj.musicS3Key) : null;
+}
+async function safeAssetUrl(key) {
+  if (!key) return null;
+  try { return await DarwinAPI.assetGetUrl(PROJECT_ID, key); }
+  catch (e) { console.warn('asset url failed for', key, e.message); return null; }
+}
+
+function rebuildSegments() {
+  const parsed = parseDarwinScript(p().scriptText || '', { totalDuration: p().totalDuration || null });
+  state.segments = buildRenderPlan(parsed, {
+    totalDuration: p().totalDuration || 0,
+    defaultLayout: p().defaultLayout || 'stock-top',
+    layoutOverrides: p().layoutOverrides || {},
+  });
+  state.captions = parsed.captions;
+  state.stockClipsNeeded = parsed.stockClipsNeeded;
+}
+
+// =============================================================================
+// Media wiring + preview render loop (mirrors DarwinReel.tsx)
+// =============================================================================
+const darwinVid = $('darwinVid'), stockVid = $('stockVid'), musicAud = $('musicAud');
+
+function wireMedia() {
+  if (state.darwinUrl) darwinVid.src = state.darwinUrl;
+  if (state.musicUrl) { musicAud.src = state.musicUrl; musicAud.volume = (typeof p().musicVolume === 'number') ? p().musicVolume : 0.15; }
+  darwinVid.muted = false; // Darwin is the audio spine
+  stockVid.muted = true;   // stock is always muted by design
+  darwinVid.addEventListener('timeupdate', () => { if (!state.playing) paint(); });
+  darwinVid.addEventListener('ended', () => { stopPlayback(); if ($('loopChk').checked) { seek(0); play(); } });
+  requestAnimationFrame(loop);
+}
+
+let lastStockIndex = -2;
+function activeSegment(t) {
+  const segs = state.segments;
+  for (const s of segs) if (t >= s.start && t < s.end) return s;
+  return segs[segs.length - 1] || { start: 0, end: total(), layout: 'full-darwin', stockIndex: null };
+}
+
+function applyLayout(seg, t) {
+  const dv = darwinVid, sv = stockVid;
+  const hasDarwin = !!state.darwinUrl;
+  const stockUrl = seg.stockIndex != null ? state.stockUrls[seg.stockIndex] : null;
+  $('edge').style.display = (seg.layout === 'stock-top' || seg.layout === 'darwin-top') ? 'block' : 'none';
+  // placeholder text if a needed source is missing
+  showPh(seg, hasDarwin, stockUrl);
+
+  // stock element source management
+  if (stockUrl) {
+    if (seg.stockIndex !== lastStockIndex) { sv.src = stockUrl; try { sv.currentTime = Math.max(0, t - seg.start); } catch (_){} lastStockIndex = seg.stockIndex; if (state.playing) sv.play().catch(()=>{}); }
+    else { const want = t - seg.start; if (Math.abs(sv.currentTime - want) > 0.3) { try { sv.currentTime = Math.max(0, want); } catch(_){} } }
+  } else { lastStockIndex = -2; }
+
+  const FULL = { top: '0', left: '0', width: '100%', height: '100%' };
+  const TOP  = { top: '0', left: '0', width: '100%', height: '50%' };
+  const BOT  = { top: '50%', left: '0', width: '100%', height: '50%' };
+  const set = (el, box, fit, pos, z, show) => {
+    el.style.display = show ? 'block' : 'none';
+    if (!show) return;
+    el.style.top = box.top; el.style.left = box.left; el.style.width = box.width; el.style.height = box.height;
+    el.style.objectFit = fit; el.style.objectPosition = pos; el.style.zIndex = z;
+  };
+
+  if (seg.layout === 'full-darwin') {
+    set(dv, FULL, 'cover', '50% 0%', 1, true);
+    set(sv, FULL, 'cover', '50% 50%', 0, false);
+  } else if (seg.layout === 'full-stock') {
+    set(dv, FULL, 'cover', '50% 0%', 1, true);   // stays for audio, covered
+    set(sv, FULL, 'cover', '50% 50%', 2, true);
+  } else if (seg.layout === 'stock-top') {
+    set(sv, TOP, 'cover', '50% 50%', 2, true);
+    set(dv, BOT, 'cover', '50% 0%', 2, true);
+  } else if (seg.layout === 'darwin-top') {
+    set(dv, TOP, 'cover', '50% 0%', 2, true);
+    set(sv, BOT, 'cover', '50% 50%', 2, true);
+  }
+}
+
+function showPh(seg, hasDarwin, stockUrl) {
+  // simple inline placeholders when a source URL is missing
+  let ph = $('framePh');
+  const needDarwin = seg.layout !== 'full-stock' && !hasDarwin;
+  const needStock = (seg.layout !== 'full-darwin') && !stockUrl;
+  if (needDarwin || needStock) {
+    if (!ph) { ph = document.createElement('div'); ph.id = 'framePh'; ph.className = 'ph'; ph.style.zIndex = 3; $('frame').appendChild(ph); }
+    ph.textContent = needDarwin ? 'Darwin video unavailable' : 'Stock clip missing';
+    ph.style.display = 'flex';
+  } else if (ph) { ph.style.display = 'none'; }
+}
+
+function paint() {
+  const t = darwinVid.src ? darwinVid.currentTime : 0;
+  const seg = activeSegment(t);
+  applyLayout(seg, t);
+  // captions
+  const cap = state.captions.find(c => t >= c.start && t < c.end);
+  const bar = $('capBar');
+  if (cap && cap.text) {
+    const cs = p().captionStyle || {};
+    const frameH = $('frame').getBoundingClientRect().height || 560;
+    const scale = frameH / 1920;
+    bar.classList.remove('hidden');
+    $('capText').textContent = cap.text;
+    $('capText').style.fontSize = Math.max(8, (cs.fontSize || 52) * scale) + 'px';
+    $('capText').style.fontWeight = cs.fontWeight || 700;
+    $('capText').style.fontFamily = cs.fontFamily || 'Inter, system-ui, sans-serif';
+    $('capText').style.color = cs.color || '#fff';
+    bar.style.bottom = ((cs.bottom != null ? cs.bottom : 220) * scale) + 'px';
+    bar.style.top = 'auto';
+  } else { bar.classList.add('hidden'); }
+  // readouts + playhead
+  $('timeRead').textContent = `${fmtTime(t)} / ${fmtTime(total())}`;
+  $('segRead').textContent = `${seg.layout}${seg.stockIndex != null ? ` (stock ${seg.stockIndex + 1})` : ''}`;
+  movePlayhead(t);
+}
+
+function loop() { if (state.playing) paint(); requestAnimationFrame(loop); }
+
+// transport
+function play() {
+  if (!darwinVid.src) return;
+  state.playing = true; $('playBtn').innerHTML = '&#10073;&#10073;';
+  darwinVid.play().catch(()=>{});
+  if (state.musicUrl) { musicAud.currentTime = darwinVid.currentTime; musicAud.play().catch(()=>{}); }
+  const seg = activeSegment(darwinVid.currentTime);
+  if (seg.stockIndex != null && stockVid.src) stockVid.play().catch(()=>{});
+}
+function stopPlayback() { state.playing = false; $('playBtn').innerHTML = '&#9658;'; darwinVid.pause(); stockVid.pause(); musicAud.pause(); }
+function togglePlay() { state.playing ? stopPlayback() : play(); }
+function seek(t) {
+  t = Math.max(0, Math.min(total(), t));
+  if (darwinVid.src) darwinVid.currentTime = t;
+  if (state.musicUrl) musicAud.currentTime = t;
+  lastStockIndex = -2; // force stock re-sync
+  paint();
+}
+$('playBtn').onclick = togglePlay;
+document.addEventListener('keydown', e => { if (e.code === 'Space' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') { e.preventDefault(); togglePlay(); } });
+
+// =============================================================================
+// Assets rail
+// =============================================================================
+function renderAssets() {
+  $('darwinName').textContent = p().darwinName || (p().darwinS3Key ? 'darwin video' : 'none');
+  $('darwinSub').textContent = total() ? `duration ${fmtTime(total())}` : 'duration pending';
+  // stock list
+  const keys = p().stockS3Keys || [], names = p().stockNames || [];
+  $('stockCount').textContent = `(${keys.length}/${state.stockClipsNeeded || 0} needed)`;
+  $('stockList').innerHTML = keys.map((k, i) => `
+    <div class="stock-row ${state.selectedSplit === i ? 'active' : ''}">
+      <span class="stock-idx">${i + 1}</span>
+      <span class="name" title="${escapeHtml(names[i] || k)}">${escapeHtml(names[i] || 'clip ' + (i + 1))}</span>
+      <button class="icon-btn" title="up" onclick="moveStock(${i},-1)" ${i === 0 ? 'disabled' : ''}>&#9650;</button>
+      <button class="icon-btn" title="down" onclick="moveStock(${i},1)" ${i === keys.length - 1 ? 'disabled' : ''}>&#9660;</button>
+      <button class="icon-btn" title="swap" onclick="swapStock(${i})">&#8635;</button>
+      <button class="icon-btn del" title="delete" onclick="deleteStock(${i})">&times;</button>
+    </div>`).join('') || '<div class="insp-meta" style="padding:0 14px">no stock clips yet</div>';
+  $('musicName').textContent = p().musicName || 'none';
+  $('rmMusic').classList.toggle('hidden', !p().musicS3Key);
+}
+
+// =============================================================================
+// Inspector: split layout switcher OR reel properties
+// =============================================================================
+const LAYOUTS = [
+  { id: 'stock-top',   name: 'Stock top',   ico: '<div class="s"></div><div class="d"></div>' },
+  { id: 'darwin-top',  name: 'Darwin top',  ico: '<div class="d"></div><div class="s"></div>' },
+  { id: 'full-darwin', name: 'Full Darwin', ico: '<div class="d"></div>' },
+  { id: 'full-stock',  name: 'Full stock',  ico: '<div class="s"></div>' },
+];
+function effectiveLayout(stockIndex) {
+  const ov = p().layoutOverrides || {};
+  return ov[stockIndex] || p().defaultLayout || 'stock-top';
+}
+function renderInspector() {
+  const insp = $('inspector');
+  if (state.selectedSplit != null) {
+    const idx = state.selectedSplit;
+    const cur = effectiveLayout(idx);
+    const seg = state.segments.find(s => s.stockIndex === idx);
+    insp.innerHTML = `
+      <div class="insp-sec">
+        <div class="insp-h">Split ${idx + 1}</div>
+        <div class="insp-meta">${seg ? `${fmtTime(seg.start)} \u2013 ${fmtTime(seg.end)}` : ''} \u00b7 uses stock clip ${idx + 1}</div>
+        <div class="layout-grid">
+          ${LAYOUTS.map(l => `
+            <div class="layout-opt ${cur === l.id ? 'active' : ''}" onclick="setLayout(${idx},'${l.id}')">
+              <div class="layout-ico">${l.ico}</div>
+              <div class="layout-name">${l.name}</div>
+            </div>`).join('')}
+        </div>
+        <div class="insp-meta" style="margin-top:10px">Layout is saved to this split only. Render re-derives from the script + these overrides.</div>
+      </div>`;
+  } else {
+    const mv = (typeof p().musicVolume === 'number') ? p().musicVolume : 0.15;
+    insp.innerHTML = `
+      <div class="insp-sec">
+        <div class="insp-h">Reel properties</div>
+        <div class="insp-meta">${escapeHtml(p().title || '')}</div>
+        <div class="field">
+          <label>Default layout for splits</label>
+          <select id="defLayout" class="btn" style="width:100%">
+            ${LAYOUTS.filter(l=>l.id!=='full-darwin').map(l => `<option value="${l.id}" ${(p().defaultLayout||'stock-top')===l.id?'selected':''}>${l.name}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Music volume <span class="val" id="mvVal">${Math.round(mv*100)}%</span></label>
+          <input type="range" id="mvRange" min="0" max="50" value="${Math.round(mv*100)}" ${p().musicS3Key?'':'disabled'} />
+        </div>
+        <div class="insp-meta">Click a split block in the timeline to set its layout.</div>
+      </div>`;
+    const dl = $('defLayout'); if (dl) dl.onchange = () => { patch({ defaultLayout: dl.value }); rebuildSegments(); renderTimeline(); paint(); };
+    const mr = $('mvRange'); if (mr) mr.oninput = () => { const v = mr.value / 100; $('mvVal').textContent = mr.value + '%'; musicAud.volume = v; patch({ musicVolume: v }); };
+  }
+}
+
+function selectSplit(idx) { state.selectedSplit = idx; renderInspector(); renderAssets(); renderTimeline(); const seg = state.segments.find(s => s.stockIndex === idx); if (seg) seek(seg.start); }
+function clearSelection() { state.selectedSplit = null; renderInspector(); renderAssets(); renderTimeline(); }
+
+function setLayout(idx, layout) {
+  const ov = { ...(p().layoutOverrides || {}) };
+  ov[idx] = layout;
+  patch({ layoutOverrides: ov });
+  rebuildSegments(); renderTimeline(); renderInspector(); paint();
+}
+
+// =============================================================================
+// Timeline
+// =============================================================================
+function renderTimeline() {
+  const inner = $('tlInner');
+  const T = total() || 1;
+  const W = Math.max(T * state.pxPerSec, $('tlScroll').clientWidth - 0);
+  const LBL = 78;
+  const x = (t) => LBL + t * state.pxPerSec;
+
+  // ruler ticks
+  const step = T > 60 ? 10 : T > 20 ? 5 : T > 8 ? 2 : 1;
+  let ticks = '';
+  for (let s = 0; s <= T; s += step) ticks += `<div class="tl-tick" style="left:${x(s)}px">${fmtTime(s)}</div>`;
+
+  // video lane blocks
+  const vBlocks = state.segments.map(seg => {
+    const left = x(seg.start), w = (seg.end - seg.start) * state.pxPerSec;
+    const sel = (seg.stockIndex != null && seg.stockIndex === state.selectedSplit) ? 'selected' : '';
+    const click = seg.stockIndex != null ? `onclick="selectSplit(${seg.stockIndex})"` : `onclick="clearSelection()"`;
+    const label = seg.layout === 'full-darwin' ? 'Darwin' : `${seg.layout.replace('-', ' ')} \u00b7 clip ${seg.stockIndex + 1}`;
+    return `<div class="tl-block ${seg.layout} ${sel}" style="left:${left}px;width:${Math.max(2,w)}px" ${click} title="${label}">${w > 60 ? label : ''}</div>`;
+  }).join('');
+
+  const narrBlock = state.darwinUrl || p().darwinS3Key ? `<div class="tl-block narr" style="left:${x(0)}px;width:${T*state.pxPerSec}px">narration (Darwin)</div>` : '';
+  const musicBlock = p().musicS3Key ? `<div class="tl-block music" style="left:${x(0)}px;width:${T*state.pxPerSec}px">${escapeHtml(p().musicName||'music')}</div>` : '';
+
+  inner.style.width = (W + 20) + 'px';
+  inner.innerHTML = `
+    <div class="tl-ruler" id="tlRuler">${ticks}</div>
+    <div class="tl-row"><div class="tl-rowlabel">Video</div><div class="tl-lane">${vBlocks}</div></div>
+    <div class="tl-row"><div class="tl-rowlabel">Narration</div><div class="tl-lane">${narrBlock}</div></div>
+    <div class="tl-row"><div class="tl-rowlabel">Music</div><div class="tl-lane">${musicBlock || '<div class="insp-meta" style="padding-left:8px;align-self:center">none</div>'}</div></div>
+    <div class="tl-playhead" id="tlPlayhead" style="left:${x(0)}px"></div>
+    <div class="tl-playhead-grip" id="tlGrip" style="left:${x(0)}px"></div>`;
+
+  // seek by clicking ruler
+  const ruler = $('tlRuler');
+  ruler.onclick = (e) => { const r = ruler.getBoundingClientRect(); const t = ($('tlScroll').scrollLeft + e.clientX - r.left - LBL) / state.pxPerSec; seek(t); };
+  // drag playhead grip
+  const grip = $('tlGrip');
+  grip.onmousedown = (e) => {
+    e.preventDefault(); const lane = ruler.getBoundingClientRect();
+    const onMove = (ev) => { const t = ($('tlScroll').scrollLeft + ev.clientX - lane.left - LBL) / state.pxPerSec; seek(t); };
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+  };
+  movePlayhead(darwinVid.src ? darwinVid.currentTime : 0);
+}
+function movePlayhead(t) {
+  const LBL = 78, left = LBL + t * state.pxPerSec;
+  const ph = $('tlPlayhead'), g = $('tlGrip');
+  if (ph) ph.style.left = left + 'px';
+  if (g) g.style.left = left + 'px';
+}
+$('zoomIn').onclick = () => { state.pxPerSec = Math.min(240, state.pxPerSec * 1.4); renderTimeline(); };
+$('zoomOut').onclick = () => { state.pxPerSec = Math.max(12, state.pxPerSec / 1.4); renderTimeline(); };
+
+// =============================================================================
+// Edits: script, stock, darwin, music  (+ autosave)
+// =============================================================================
+function patch(fields) { state.project = { ...state.project, ...fields }; scheduleSave(fields); }
+function scheduleSave(fields) {
+  clearTimeout(state.saveTimer);
+  state.saveTimer = setTimeout(async () => {
+    try { await DarwinAPI.update(PROJECT_ID, fields); }
+    catch (e) { toast('Save failed: ' + e.message, 'error'); }
+  }, 700);
+}
+
+$('scriptText').addEventListener('input', () => {
+  patch({ scriptText: $('scriptText').value });
+  rebuildSegments(); renderTimeline(); renderAssets(); if (state.selectedSplit != null && !state.segments.some(s=>s.stockIndex===state.selectedSplit)) clearSelection(); paint();
+});
+
+// stock reorder / delete / swap / add
+function moveStock(i, dir) {
+  const j = i + dir; const keys = [...(p().stockS3Keys||[])], names = [...(p().stockNames||[])];
+  if (j < 0 || j >= keys.length) return;
+  [keys[i], keys[j]] = [keys[j], keys[i]]; [names[i], names[j]] = [names[j], names[i]];
+  patch({ stockS3Keys: keys, stockNames: names });
+  resolveAssetUrls().then(() => { lastStockIndex = -2; renderAssets(); renderTimeline(); paint(); });
+}
+function deleteStock(i) {
+  const keys = [...(p().stockS3Keys||[])], names = [...(p().stockNames||[])];
+  keys.splice(i, 1); names.splice(i, 1);
+  patch({ stockS3Keys: keys, stockNames: names });
+  if (state.selectedSplit === i) state.selectedSplit = null;
+  resolveAssetUrls().then(() => { lastStockIndex = -2; renderAssets(); renderTimeline(); renderInspector(); paint(); });
+}
+let swapStockIdx = -1;
+function swapStock(i) { swapStockIdx = i; $('fSwapStock').click(); }
+$('fSwapStock').onchange = async () => {
+  const f = $('fSwapStock').files[0]; $('fSwapStock').value = '';
+  if (!f || swapStockIdx < 0) return;
+  toast('Uploading stock\u2026');
+  try {
+    const key = await DarwinAPI.uploadFile(PROJECT_ID, 'stock', f);
+    const keys = [...(p().stockS3Keys||[])], names = [...(p().stockNames||[])];
+    keys[swapStockIdx] = key; names[swapStockIdx] = f.name;
+    patch({ stockS3Keys: keys, stockNames: names });
+    await resolveAssetUrls(); lastStockIndex = -2; renderAssets(); renderTimeline(); paint();
+    toast('Stock swapped', 'success');
+  } catch (e) { toast('Swap failed: ' + e.message, 'error'); }
+};
+$('addStock').onclick = () => $('fStock').click();
+$('fStock').onchange = async () => {
+  const files = [...$('fStock').files]; $('fStock').value = '';
+  if (!files.length) return;
+  toast(`Uploading ${files.length} clip(s)\u2026`);
+  try {
+    const keys = [...(p().stockS3Keys||[])], names = [...(p().stockNames||[])];
+    for (const f of files) { const key = await DarwinAPI.uploadFile(PROJECT_ID, 'stock', f); keys.push(key); names.push(f.name); }
+    patch({ stockS3Keys: keys, stockNames: names });
+    await resolveAssetUrls(); renderAssets(); renderTimeline(); paint();
+    toast('Stock added', 'success');
+  } catch (e) { toast('Upload failed: ' + e.message, 'error'); }
+};
+
+// darwin swap
+$('swapDarwin').onclick = () => $('fDarwin').click();
+$('fDarwin').onchange = async () => {
+  const f = $('fDarwin').files[0]; $('fDarwin').value = '';
+  if (!f) return;
+  toast('Uploading Darwin video\u2026');
+  try {
+    const key = await DarwinAPI.uploadFile(PROJECT_ID, 'darwin', f);
+    patch({ darwinS3Key: key, darwinName: f.name });
+    state.darwinUrl = await safeAssetUrl(key);
+    darwinVid.src = state.darwinUrl || '';
+    renderAssets(); renderTimeline(); paint();
+    maybeBackfillDuration(true);
+    toast('Darwin video swapped', 'success');
+  } catch (e) { toast('Swap failed: ' + e.message, 'error'); }
+};
+
+// music set / remove
+$('swapMusic').onclick = () => $('fMusic').click();
+$('fMusic').onchange = async () => {
+  const f = $('fMusic').files[0]; $('fMusic').value = '';
+  if (!f) return;
+  toast('Uploading music\u2026');
+  try {
+    const key = await DarwinAPI.uploadFile(PROJECT_ID, 'music', f);
+    patch({ musicS3Key: key, musicName: f.name });
+    state.musicUrl = await safeAssetUrl(key);
+    musicAud.src = state.musicUrl || '';
+    renderAssets(); renderTimeline(); renderInspector();
+    toast('Music set', 'success');
+  } catch (e) { toast('Music upload failed: ' + e.message, 'error'); }
+};
+$('rmMusic').onclick = () => {
+  patch({ musicS3Key: null, musicName: null });
+  state.musicUrl = null; musicAud.src = ''; renderAssets(); renderTimeline(); renderInspector();
+};
+
+// duration backfill
+function maybeBackfillDuration(force) {
+  if (!force && p().totalDuration) return;
+  if (!darwinVid.src) return;
+  const tryRead = () => {
+    const d = darwinVid.duration;
+    if (isFinite(d) && d > 0) {
+      patch({ totalDuration: d });
+      rebuildSegments(); renderAssets(); renderTimeline(); paint();
+    }
+  };
+  darwinVid.addEventListener('loadedmetadata', tryRead, { once: true });
+  if (darwinVid.readyState >= 1) tryRead();
+}
+
+// =============================================================================
+// Render + poll
+// =============================================================================
+function setStatus(st) {
+  const pill = $('statusPill');
+  pill.className = 'status-pill ' + st;
+  pill.textContent = ({ editing: 'Editing', rendering: 'Rendering\u2026', complete: 'Ready', failed: 'Failed' }[st] || st);
+  const done = st === 'complete' && p().render && p().render.mp4Url;
+  $('dlBtn').classList.toggle('hidden', !done);
+  if (done) $('dlBtn').href = p().render.mp4Url;
+  $('renderBtn').disabled = (st === 'rendering');
+  $('renderBtn').textContent = st === 'rendering' ? 'Rendering\u2026' : (st === 'complete' ? 'Re-render' : 'Render');
+}
+
+$('renderBtn').onclick = async () => {
+  // flush all current state, then dispatch
+  $('renderBtn').disabled = true; $('renderBtn').textContent = 'Saving\u2026';
+  try {
+    clearTimeout(state.saveTimer);
+    await DarwinAPI.update(PROJECT_ID, {
+      scriptText: $('scriptText').value,
+      layoutOverrides: p().layoutOverrides || {},
+      defaultLayout: p().defaultLayout || 'stock-top',
+      totalDuration: p().totalDuration || 0,
+      stockS3Keys: p().stockS3Keys || [], stockNames: p().stockNames || [],
+      musicVolume: (typeof p().musicVolume === 'number') ? p().musicVolume : 0.15,
+      captionStyle: p().captionStyle || {},
+    });
+    await DarwinAPI.render(PROJECT_ID);
+    state.project.status = 'rendering';
+    setStatus('rendering');
+    toast('Render dispatched', 'success');
+    startPolling();
+  } catch (e) { toast('Render failed: ' + e.message, 'error'); setStatus(p().status || 'editing'); }
+};
+
+function startPolling() {
+  clearInterval(state.pollTimer);
+  state.pollTimer = setInterval(async () => {
+    try {
+      const r = await DarwinAPI.renderStatus(PROJECT_ID);
+      if (r.status === 'complete') {
+        clearInterval(state.pollTimer);
+        state.project = await DarwinAPI.get(PROJECT_ID);
+        setStatus('complete'); toast('Render complete', 'success');
+      } else if (r.status === 'failed') {
+        clearInterval(state.pollTimer);
+        state.project.status = 'failed'; setStatus('failed');
+        toast('Render failed: ' + (r.error || 'see logs'), 'error');
+      }
+    } catch (e) { /* transient, keep polling */ }
+  }, 5000);
+}
+
+boot();
+</script>
+</body>
+</html>
