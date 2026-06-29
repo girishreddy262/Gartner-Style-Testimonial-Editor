@@ -59,6 +59,10 @@
   .stage-pad { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 14px; }
   .frame { position: relative; aspect-ratio: 1080 / 1920; height: min(100%, 560px); background: #000; border-radius: 10px; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,0.5); }
   .frame video { position: absolute; background: #000; }
+  .slot { position: absolute; overflow: hidden; z-index: 2; }
+  .slot.selectable { cursor: move; }
+  .slot.sel { outline: 2px solid #0183FF; outline-offset: -2px; z-index: 4; }
+  .slot video { position: absolute; inset: 0; width: 100%; height: 100%; }
   .frame .ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #3a4654; font-family: monospace; font-size: 13px; background: #11161d; }
   .frame .cap { position: absolute; left: 6%; right: 6%; display: flex; justify-content: center; pointer-events: none; }
   .frame .cap span { background: rgba(0,0,0,0.55); border-radius: 10px; color: #fff; text-align: center; line-height: 1.25; padding: 2.2% 4%; max-width: 88%; }
@@ -89,6 +93,10 @@
   .field label { display: block; font-size: 10px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; font-weight: 700; }
   .field input[type=range] { width: 100%; }
   .field .val { font-size: 11px; color: #94a3b8; font-family: ui-monospace, Menlo, monospace; }
+  .num-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .num-row .field { margin-bottom: 8px; }
+  .num-row input[type=number] { width: 100%; background: #232327; border: 1px solid #2a2a2e; border-radius: 6px; color: #EDF6FF; padding: 5px 7px; font-size: 12px; font-family: ui-monospace, Menlo, monospace; }
+  .reset-link { color: #66B0FF; font-size: 11px; cursor: pointer; background: none; border: 0; padding: 0; }
 
   /* ── timeline ── */
   .timeline { background: #18181b; border-top: 1px solid #2a2a2e; display: flex; flex-direction: column; min-height: 0; }
@@ -183,8 +191,8 @@
     <div class="stage">
       <div class="stage-pad">
         <div class="frame" id="frame">
-          <video id="darwinVid" muted playsinline></video>
-          <video id="stockVid" muted playsinline></video>
+          <div class="slot" id="dSlot"><video id="darwinVid" muted playsinline></video></div>
+          <div class="slot" id="sSlot"><video id="stockVid" muted playsinline></video></div>
           <div class="edge" id="edge"></div>
           <div class="cap hidden" id="capBar"><span id="capText"></span></div>
         </div>
@@ -234,6 +242,7 @@ const state = {
   darwinUrl: null, stockUrls: [], musicUrl: null,
   segments: [], captions: [],
   selectedSplit: null,        // stockIndex of the selected split, or null
+  selectedClip: null,         // transform target key: stock-{k} | dhalf-{k} | dfull
   pxPerSec: 56,
   playing: false,
   saveTimer: null,
@@ -285,6 +294,7 @@ async function boot() {
   renderTimeline();
   renderInspector();
   wireMedia();
+  initPreviewInteract();
   // Backfill duration if missing, once the darwin video reports metadata.
   maybeBackfillDuration();
   paint(); // draw frame 0 (sets edge visibility, time readout, playhead) before first play
@@ -319,6 +329,7 @@ function rebuildSegments() {
 // Media wiring + preview render loop (mirrors DarwinReel.tsx)
 // =============================================================================
 const darwinVid = $('darwinVid'), stockVid = $('stockVid'), musicAud = $('musicAud');
+const dSlot = $('dSlot'), sSlot = $('sSlot');
 
 function wireMedia() {
   if (state.darwinUrl) darwinVid.src = state.darwinUrl;
@@ -337,42 +348,82 @@ function activeSegment(t) {
   return segs[segs.length - 1] || { start: 0, end: total(), layout: 'full-darwin', stockIndex: null };
 }
 
+// ── Per-clip transforms (scale/position on any clip; trim on stock only) ──────
+// Stored per placed instance on project.clipTransforms, keyed:
+//   stock-{k}  stock clip in split k  (scale, x, y, trimIn, trimOut)
+//   dhalf-{k}  Darwin half in split k (scale, x, y)
+//   dfull      full-frame Darwin, global (scale, x, y)
+// x/y are percent offsets; scale is a multiplier on an object-fit:cover element.
+function clipTx(key) {
+  const t = (p().clipTransforms || {})[key] || {};
+  return { scale: t.scale != null ? t.scale : 1, x: t.x || 0, y: t.y || 0, trimIn: t.trimIn || 0, trimOut: t.trimOut || 0 };
+}
+function setClipTx(key, fields) {
+  const m = { ...(p().clipTransforms || {}) };
+  m[key] = { ...clipTx(key), ...fields };
+  patch({ clipTransforms: m });
+}
+function resetClipTx(key) {
+  const m = { ...(p().clipTransforms || {}) };
+  delete m[key];
+  patch({ clipTransforms: m });
+  lastStockIndex = -2; applyTransforms(); paint(); renderInspector();
+}
+function txCss(key) { const t = clipTx(key); return `translate(${t.x}%, ${t.y}%) scale(${t.scale})`; }
+function darwinKey(seg) { return (seg && (seg.layout === 'stock-top' || seg.layout === 'darwin-top') && seg.stockIndex != null) ? `dhalf-${seg.stockIndex}` : 'dfull'; }
+function stockKey(seg) { return (seg && seg.stockIndex != null) ? `stock-${seg.stockIndex}` : null; }
+
+function applyTransforms() {
+  const seg = activeSegment(darwinVid.src ? darwinVid.currentTime : 0);
+  const dk = darwinKey(seg), sk = stockKey(seg);
+  darwinVid.style.transformOrigin = 'center center';
+  darwinVid.style.transform = txCss(dk);
+  if (sk) { stockVid.style.transformOrigin = 'center center'; stockVid.style.transform = txCss(sk); }
+  $('dSlot').classList.toggle('sel', state.selectedClip === dk);
+  $('sSlot').classList.toggle('sel', sk != null && state.selectedClip === sk);
+  $('dSlot').classList.toggle('selectable', dSlot.style.display !== 'none');
+  $('sSlot').classList.toggle('selectable', sSlot.style.display !== 'none');
+}
+
 function applyLayout(seg, t) {
   const dv = darwinVid, sv = stockVid;
   const hasDarwin = !!state.darwinUrl;
   const stockUrl = seg.stockIndex != null ? state.stockUrls[seg.stockIndex] : null;
   $('edge').style.display = (seg.layout === 'stock-top' || seg.layout === 'darwin-top') ? 'block' : 'none';
-  // placeholder text if a needed source is missing
   showPh(seg, hasDarwin, stockUrl);
 
-  // stock element source management
+  // stock element source management, honoring stock trim in/out
   if (stockUrl) {
-    if (seg.stockIndex !== lastStockIndex) { sv.src = stockUrl; try { sv.currentTime = Math.max(0, t - seg.start); } catch (_){} lastStockIndex = seg.stockIndex; if (state.playing) sv.play().catch(()=>{}); }
-    else { const want = t - seg.start; if (Math.abs(sv.currentTime - want) > 0.3) { try { sv.currentTime = Math.max(0, want); } catch(_){} } }
+    const sk = `stock-${seg.stockIndex}`;
+    const tin = clipTx(sk).trimIn, tout = clipTx(sk).trimOut;
+    const want = tin + (t - seg.start);
+    const clamped = (tout > tin) ? Math.min(want, tout) : want;
+    if (seg.stockIndex !== lastStockIndex) { sv.src = stockUrl; try { sv.currentTime = Math.max(0, clamped); } catch (_){} lastStockIndex = seg.stockIndex; if (state.playing) sv.play().catch(()=>{}); }
+    else { if (Math.abs(sv.currentTime - clamped) > 0.3) { try { sv.currentTime = Math.max(0, clamped); } catch(_){} } }
   } else { lastStockIndex = -2; }
 
   const FULL = { top: '0', left: '0', width: '100%', height: '100%' };
   const TOP  = { top: '0', left: '0', width: '100%', height: '50%' };
   const BOT  = { top: '50%', left: '0', width: '100%', height: '50%' };
-  const set = (el, box, fit, pos, z, show) => {
-    el.style.display = show ? 'block' : 'none';
+  const setSlot = (slot, vid, box, fit, pos, z, show) => {
+    slot.style.display = show ? 'block' : 'none';
     if (!show) return;
-    el.style.top = box.top; el.style.left = box.left; el.style.width = box.width; el.style.height = box.height;
-    el.style.objectFit = fit; el.style.objectPosition = pos; el.style.zIndex = z;
+    slot.style.top = box.top; slot.style.left = box.left; slot.style.width = box.width; slot.style.height = box.height; slot.style.zIndex = z;
+    vid.style.objectFit = fit; vid.style.objectPosition = pos;
   };
 
   if (seg.layout === 'full-darwin') {
-    set(dv, FULL, 'cover', '50% 0%', 1, true);
-    set(sv, FULL, 'cover', '50% 50%', 0, false);
+    setSlot(dSlot, dv, FULL, 'cover', '50% 0%', 1, true);
+    setSlot(sSlot, sv, FULL, 'cover', '50% 50%', 0, false);
   } else if (seg.layout === 'full-stock') {
-    set(dv, FULL, 'cover', '50% 0%', 1, true);   // stays for audio, covered
-    set(sv, FULL, 'cover', '50% 50%', 2, true);
+    setSlot(dSlot, dv, FULL, 'cover', '50% 0%', 1, true);   // stays for audio, covered
+    setSlot(sSlot, sv, FULL, 'cover', '50% 50%', 2, true);
   } else if (seg.layout === 'stock-top') {
-    set(sv, TOP, 'cover', '50% 50%', 2, true);
-    set(dv, BOT, 'cover', '50% 0%', 2, true);
+    setSlot(sSlot, sv, TOP, 'cover', '50% 50%', 2, true);
+    setSlot(dSlot, dv, BOT, 'cover', '50% 0%', 2, true);
   } else if (seg.layout === 'darwin-top') {
-    set(dv, TOP, 'cover', '50% 0%', 2, true);
-    set(sv, BOT, 'cover', '50% 50%', 2, true);
+    setSlot(dSlot, dv, TOP, 'cover', '50% 0%', 2, true);
+    setSlot(sSlot, sv, BOT, 'cover', '50% 50%', 2, true);
   }
 }
 
@@ -412,6 +463,7 @@ function paint() {
   $('timeRead').textContent = `${fmtTime(t)} / ${fmtTime(total())}`;
   $('segRead').textContent = `${seg.layout}${seg.stockIndex != null ? ` (stock ${seg.stockIndex + 1})` : ''}`;
   movePlayhead(t);
+  applyTransforms();
 }
 
 function loop() {
@@ -489,6 +541,7 @@ function effectiveLayout(stockIndex) {
 }
 function renderInspector() {
   const insp = $('inspector');
+  if (state.selectedClip) { renderClipInspector(insp, state.selectedClip); return; }
   if (state.selectedSplit != null) {
     const idx = state.selectedSplit;
     const cur = effectiveLayout(idx);
@@ -529,8 +582,91 @@ function renderInspector() {
   }
 }
 
-function selectSplit(idx) { state.selectedSplit = idx; renderInspector(); renderAssets(); renderTimeline(); const seg = state.segments.find(s => s.stockIndex === idx); if (seg) seek(seg.start); }
-function clearSelection() { state.selectedSplit = null; renderInspector(); renderAssets(); renderTimeline(); }
+function selectSplit(idx) { state.selectedSplit = idx; state.selectedClip = `stock-${idx}`; renderInspector(); renderAssets(); renderTimeline(); const seg = state.segments.find(s => s.stockIndex === idx); if (seg) seek(seg.start); }
+function clearSelection() { state.selectedSplit = null; state.selectedClip = null; renderInspector(); renderAssets(); renderTimeline(); applyTransforms(); }
+
+function renderClipInspector(insp, key) {
+  const isStock = key.startsWith('stock-'), isDHalf = key.startsWith('dhalf-');
+  const idx = (isStock || isDHalf) ? parseInt(key.split('-')[1], 10) : null;
+  const t = clipTx(key);
+  const label = isStock ? `Stock clip ${idx + 1}` : isDHalf ? `Darwin (split ${idx + 1})` : 'Darwin (full frame)';
+  const seg = idx != null ? state.segments.find(s => s.stockIndex === idx) : null;
+  const layoutGrid = (idx != null) ? `
+      <div class="insp-h">Layout</div>
+      <div class="layout-grid">
+        ${LAYOUTS.map(l => `<div class="layout-opt ${effectiveLayout(idx) === l.id ? 'active' : ''}" onclick="setLayout(${idx},'${l.id}')"><div class="layout-ico">${l.ico}</div><div class="layout-name">${l.name}</div></div>`).join('')}
+      </div>` : '';
+  const trimRow = isStock ? `
+      <div class="insp-h">Trim (stock source)</div>
+      <div class="num-row">
+        <div class="field"><label>In (s)</label><input type="number" id="txTrimIn" min="0" step="0.1" value="${t.trimIn}"></div>
+        <div class="field"><label>Out (s)</label><input type="number" id="txTrimOut" min="0" step="0.1" value="${t.trimOut}"></div>
+      </div>
+      <div class="insp-meta">Out 0 means play from In for the slot length.</div>` : '';
+  insp.innerHTML = `
+    <div class="insp-sec">
+      <div class="insp-h">${label}</div>
+      <div class="insp-meta">${seg ? `${fmtTime(seg.start)} \u2013 ${fmtTime(seg.end)}` : 'whole reel'} \u00b7 drag in preview to pan, scroll to zoom</div>
+      ${layoutGrid}
+      <div class="insp-h">Frame</div>
+      <div class="field"><label>Scale <span class="val" id="txScaleVal">${Math.round(t.scale * 100)}%</span></label><input type="range" id="txScale" min="50" max="400" value="${Math.round(t.scale * 100)}"></div>
+      <div class="field"><label>Position X <span class="val" id="txXVal">${t.x}%</span></label><input type="range" id="txX" min="-50" max="50" value="${t.x}"></div>
+      <div class="field"><label>Position Y <span class="val" id="txYVal">${t.y}%</span></label><input type="range" id="txY" min="-50" max="50" value="${t.y}"></div>
+      ${trimRow}
+      <button class="reset-link" onclick="resetClipTx('${key}')">reset framing</button>
+      <div class="insp-meta" style="margin-top:8px"><a href="#" onclick="clearSelection();return false" style="color:#66B0FF">done</a></div>
+    </div>`;
+  const bind = (id, fn) => { const el = $(id); if (el) el.oninput = fn; };
+  bind('txScale', e => { setClipTx(key, { scale: +(e.target.value / 100).toFixed(2) }); $('txScaleVal').textContent = e.target.value + '%'; applyTransforms(); });
+  bind('txX', e => { setClipTx(key, { x: +e.target.value }); $('txXVal').textContent = e.target.value + '%'; applyTransforms(); });
+  bind('txY', e => { setClipTx(key, { y: +e.target.value }); $('txYVal').textContent = e.target.value + '%'; applyTransforms(); });
+  bind('txTrimIn', e => { setClipTx(key, { trimIn: Math.max(0, +e.target.value || 0) }); lastStockIndex = -2; paint(); });
+  bind('txTrimOut', e => { setClipTx(key, { trimOut: Math.max(0, +e.target.value || 0) }); lastStockIndex = -2; paint(); });
+}
+
+function selectClipFromSlot(which) {
+  const seg = activeSegment(darwinVid.src ? darwinVid.currentTime : 0);
+  const key = which === 'd' ? darwinKey(seg) : stockKey(seg);
+  if (!key) return null;
+  state.selectedClip = key;
+  state.selectedSplit = (key.startsWith('stock-') || key.startsWith('dhalf-')) ? seg.stockIndex : null;
+  renderInspector(); renderTimeline(); applyTransforms();
+  return key;
+}
+function initPreviewInteract() {
+  const frame = $('frame');
+  const startDrag = (which) => (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const key = selectClipFromSlot(which);
+    if (!key) return;
+    const rect = frame.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY, base = clipTx(key);
+    let moved = false;
+    const onMove = (ev) => {
+      if (Math.abs(ev.clientX - sx) > 2 || Math.abs(ev.clientY - sy) > 2) moved = true;
+      const dx = (ev.clientX - sx) / rect.width * 100, dy = (ev.clientY - sy) / rect.height * 100;
+      const m = { ...(p().clipTransforms || {}) };
+      m[key] = { ...base, x: +(base.x + dx).toFixed(1), y: +(base.y + dy).toFixed(1) };
+      state.project.clipTransforms = m; // live, persisted on mouseup
+      applyTransforms();
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+      if (moved) { setClipTx(key, { x: clipTx(key).x, y: clipTx(key).y }); renderInspector(); }
+    };
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+  };
+  dSlot.addEventListener('mousedown', startDrag('d'));
+  sSlot.addEventListener('mousedown', startDrag('s'));
+  frame.addEventListener('wheel', (e) => {
+    if (!state.selectedClip) return;
+    e.preventDefault();
+    const cur = clipTx(state.selectedClip).scale;
+    const next = Math.max(0.5, Math.min(4, +(cur + (e.deltaY < 0 ? 0.05 : -0.05)).toFixed(2)));
+    setClipTx(state.selectedClip, { scale: next }); applyTransforms(); renderInspector();
+  }, { passive: false });
+}
 
 function setLayout(idx, layout) {
   const ov = { ...(p().layoutOverrides || {}) };
@@ -668,7 +804,8 @@ $('fSwapStock').onchange = async () => {
     const key = await DarwinAPI.uploadFile(PROJECT_ID, 'stock', f);
     const keys = [...(p().stockS3Keys||[])], names = [...(p().stockNames||[])];
     keys[swapStockIdx] = key; names[swapStockIdx] = f.name;
-    patch({ stockS3Keys: keys, stockNames: names });
+    const tx = { ...(p().clipTransforms || {}) }; delete tx[`stock-${swapStockIdx}`]; // new clip, fresh framing
+    patch({ stockS3Keys: keys, stockNames: names, clipTransforms: tx });
     await resolveAssetUrls(); lastStockIndex = -2; renderAssets(); renderTimeline(); paint();
     toast('Stock swapped', 'success');
   } catch (e) { toast('Swap failed: ' + e.message, 'error'); }
@@ -766,6 +903,7 @@ $('renderBtn').onclick = async () => {
       layoutOverrides: p().layoutOverrides || {},
       defaultLayout: p().defaultLayout || 'stock-top',
       darwinClips: p().darwinClips || [],
+      clipTransforms: p().clipTransforms || {},
       totalDuration: p().totalDuration || 0,
       stockS3Keys: p().stockS3Keys || [], stockNames: p().stockNames || [],
       musicVolume: (typeof p().musicVolume === 'number') ? p().musicVolume : 0.15,
