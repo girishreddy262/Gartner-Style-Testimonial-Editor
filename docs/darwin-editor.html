@@ -64,9 +64,13 @@
   .slot.selectable { cursor: move; }
   .slot.sel { outline: 2px solid #0183FF; outline-offset: -2px; z-index: 4; }
   .slot video { position: absolute; inset: 0; width: 100%; height: 100%; }
-  .frame .ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #3a4654; font-family: monospace; font-size: 13px; background: #11161d; }
+  .frame .ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #3a4654; font-family: Inter, system-ui, sans-serif; font-size: 12px; background: #11161d; z-index: 1; }
+  .frame .ph.hidden { display: none; }
+  .tl-edge { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 3; background: transparent; }
+  .tl-edge.l { left: 0; } .tl-edge.r { right: 0; }
+  .tl-block:hover .tl-edge { background: rgba(255,255,255,0.35); }
   .frame .cap { position: absolute; left: 6%; right: 6%; display: flex; justify-content: center; pointer-events: none; z-index: 6; }
-  .frame .cap span { background: rgba(0,0,0,0.55); border-radius: 10px; color: #fff; text-align: center; line-height: 1.25; padding: 2.2% 4%; max-width: 88%; }
+  .frame .cap span { background: rgba(0,0,0,0.55); border-radius: 10px; color: #fff; text-align: center; line-height: 1.25; padding: 2.2% 4%; max-width: 88%; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
   .edge { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: rgba(255,255,255,0.18); pointer-events: none; z-index: 5; }
 
   .transport { display: flex; align-items: center; gap: 14px; padding: 9px 16px; border-top: 1px solid #2a2a2e; background: #18181b; }
@@ -211,8 +215,8 @@
     <div class="stage">
       <div class="stage-pad">
         <div class="frame" id="frame">
-          <div class="slot" id="dSlot"><video id="darwinVid" muted playsinline></video></div>
-          <div class="slot" id="sSlot"><video id="stockVid" muted playsinline></video></div>
+          <div class="slot" id="dSlot"><video id="darwinVid" muted playsinline></video><div class="ph hidden" id="dPh"></div></div>
+          <div class="slot" id="sSlot"><video id="stockVid" muted playsinline></video><div class="ph hidden" id="sPh"></div></div>
           <div class="edge" id="edge"></div>
           <div class="cap hidden" id="capBar"><span id="capText"></span></div>
         </div>
@@ -476,18 +480,22 @@ function applyLayout(seg, t) {
 }
 
 function showPh(seg, hasDarwin, stockUrl) {
-  // simple inline placeholders when a source URL is missing
-  let ph = $('framePh');
+  // placeholders live INSIDE each slot, so a missing stock clip never covers the Darwin half
   const needDarwin = seg.layout !== 'full-stock' && !hasDarwin;
   const needStock = (seg.layout !== 'full-darwin') && !stockUrl;
-  if (needDarwin || needStock) {
-    if (!ph) { ph = document.createElement('div'); ph.id = 'framePh'; ph.className = 'ph'; ph.style.zIndex = 3; $('frame').appendChild(ph); }
-    const hint = (p().footageHints || [])[seg.stockIndex];
-    ph.textContent = needDarwin ? 'Darwin video unavailable' : (hint ? 'Tap to add: ' + hint : 'Tap to add stock clip');
-    ph.style.display = 'flex';
-    if (needStock && !needDarwin) { ph.style.cursor = 'pointer'; ph.onclick = () => $('fStock').click(); }
-    else { ph.style.cursor = 'default'; ph.onclick = null; }
-  } else if (ph) { ph.style.display = 'none'; }
+  const dPh = $('dPh'), sPh = $('sPh');
+  dPh.classList.toggle('hidden', !needDarwin);
+  if (needDarwin) { dPh.textContent = 'Darwin video unavailable'; }
+  sPh.classList.toggle('hidden', !needStock);
+  if (needStock) {
+    const hint = (p().footageHints || [])[seg.stockIndex] || '';
+    const n = seg.stockIndex != null ? seg.stockIndex + 1 : '';
+    sPh.innerHTML = `<div style="text-align:center;padding:0 8%;cursor:pointer">
+      <div style="font-weight:600;color:#5b6b7d">+ Tap to add stock ${n}</div>
+      ${hint ? `<div style="font-size:11px;margin-top:5px;color:#3a4654;line-height:1.35">${escapeHtml(hint.slice(0, 64))}${hint.length > 64 ? '\u2026' : ''}</div>` : ''}</div>`;
+    sPh.style.cursor = 'pointer';
+    sPh.onclick = () => $('fStock').click();
+  } else { sPh.onclick = null; }
 }
 
 function paint() {
@@ -507,8 +515,10 @@ function paint() {
     $('capText').style.fontWeight = cs.fontWeight || 700;
     $('capText').style.fontFamily = cs.fontFamily || 'Inter, system-ui, sans-serif';
     $('capText').style.color = cs.color || '#fff';
-    bar.style.bottom = ((cs.bottom != null ? cs.bottom : 220) * scale) + 'px';
-    bar.style.top = 'auto';
+    const pos = cs.position || 'bottom';
+    if (pos === 'top') { bar.style.top = (180 * scale) + 'px'; bar.style.bottom = 'auto'; bar.style.transform = 'none'; }
+    else if (pos === 'center') { bar.style.top = '50%'; bar.style.bottom = 'auto'; bar.style.transform = 'translateY(-50%)'; }
+    else { bar.style.bottom = ((cs.bottom != null ? cs.bottom : 220) * scale) + 'px'; bar.style.top = 'auto'; bar.style.transform = 'none'; }
   } else { bar.classList.add('hidden'); }
   // readouts + playhead
   $('timeRead').textContent = `${fmtTime(t)} / ${fmtTime(total())}`;
@@ -639,10 +649,17 @@ function renderInspector() {
           <label>Music volume <span class="val" id="mvVal">${Math.round(mv*100)}%</span></label>
           <input type="range" id="mvRange" min="0" max="50" value="${Math.round(mv*100)}" ${p().musicS3Key?'':'disabled'} />
         </div>
-        <div class="insp-meta">Click a split block in the timeline to set its layout.</div>
+        <div class="field">
+          <label>Caption position</label>
+          <select id="capPos" class="btn" style="width:100%">
+            ${[['bottom','Bottom'],['center','Center'],['top','Top']].map(([v,n])=>`<option value="${v}" ${((p().captionStyle||{}).position||'bottom')===v?'selected':''}>${n}</option>`).join('')}
+          </select>
+        </div>
+        <div class="insp-meta">Captions are clamped to 2 lines. Click a split block in the timeline to set its layout; drag a split edge to resize it.</div>
       </div>`;
     const dl = $('defLayout'); if (dl) dl.onchange = () => { patch({ defaultLayout: dl.value }); rebuildSegments(); renderTimeline(); paint(); };
     const mr = $('mvRange'); if (mr) mr.oninput = () => { const v = mr.value / 100; $('mvVal').textContent = mr.value + '%'; musicAud.volume = v; patch({ musicVolume: v }); };
+    const cp = $('capPos'); if (cp) cp.onchange = () => { patch({ captionStyle: { ...(p().captionStyle||{}), position: cp.value } }); paint(); };
   }
 }
 
@@ -696,6 +713,8 @@ function openTrimPopup(idx) {
   if (!url) { toast('Add this stock clip first, then trim', 'error'); return; }
   const t = clipTx(`stock-${idx}`);
   trimState.index = idx;
+  const seg = state.segments.find(s => s.stockIndex === idx);
+  trimState.splitLen = seg ? +(seg.end - seg.start).toFixed(2) : 0;
   const hint = (p().footageHints || [])[idx];
   $('trimTitle').textContent = `Trim stock clip ${idx + 1}` + (hint ? ' \u00b7 ' + hint.slice(0, 38) : '');
   $('trimModal').classList.remove('hidden');
@@ -721,7 +740,11 @@ function renderTrimBar() {
   $('trimSel').style.left = pc(trimState.in); $('trimSel').style.width = ((trimState.out - trimState.in) / dur * 100) + '%';
   $('trimHIn').style.left = pc(trimState.in); $('trimHOut').style.left = pc(trimState.out);
   $('trimPhEl').style.left = pc(trimVidEl.currentTime || trimState.in);
-  $('trimRead').textContent = `in ${fmtTime(trimState.in)}  \u2013  out ${fmtTime(trimState.out)}  (${(trimState.out - trimState.in).toFixed(1)}s of ${fmtTime(dur)})`;
+  const need = trimState.splitLen || 0;
+  const tooShort = need > 0 && trimState.dur < need - 0.05;
+  $('trimRead').textContent = `in ${fmtTime(trimState.in)}  \u2013  out ${fmtTime(trimState.out)}  (${(trimState.out - trimState.in).toFixed(1)}s`
+    + (need ? ` / split is ${need.toFixed(1)}s` : '') + ')'
+    + (tooShort ? '  \u26a0 clip shorter than split, holds last frame' : '');
   $('trimTime').textContent = `${fmtTime(trimVidEl.currentTime || 0)} / ${fmtTime(dur)}`;
 }
 function wireTrimPopup() {
@@ -732,8 +755,9 @@ function wireTrimPopup() {
       e.preventDefault(); e.stopPropagation();
       const onMove = (ev) => {
         const tt = xToTime(ev.clientX);
-        if (which === 'in') trimState.in = Math.max(0, Math.min(tt, trimState.out - 0.2));
-        else trimState.out = Math.min(trimState.dur, Math.max(tt, trimState.in + 0.2));
+        const minSel = Math.max(0.2, Math.min(trimState.splitLen || 0, trimState.dur));
+        if (which === 'in') trimState.in = Math.max(0, Math.min(tt, trimState.out - minSel));
+        else trimState.out = Math.min(trimState.dur, Math.max(tt, trimState.in + minSel));
         try { trimVidEl.currentTime = which === 'in' ? trimState.in : trimState.out; } catch (_) {}
         renderTrimBar();
       };
@@ -856,6 +880,23 @@ function setLayout(idx, layout) {
 // =============================================================================
 // Timeline
 // =============================================================================
+// timestamp markers in the script, used by timeline edge-drag to retime splits
+function getMarkers() {
+  const lines = (p().scriptText || '').split(/\r?\n/);
+  const out = [];
+  lines.forEach((ln, i) => { const m = ln.match(/^\s*\[(\d+):(\d+)\]/); if (m) out.push({ lineIdx: i, t: (+m[1]) * 60 + (+m[2]) }); });
+  return out;
+}
+function setMarkerTime(lineIdx, t) {
+  const lines = (p().scriptText || '').split(/\r?\n/);
+  if (lineIdx < 0 || lineIdx >= lines.length) return;
+  const mm = Math.floor(t / 60), ss = Math.round(t % 60);
+  const ts = `[${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}]`;
+  lines[lineIdx] = lines[lineIdx].replace(/^\s*\[\d+:\d+\]/, ts);
+  patch({ scriptText: lines.join('\n') });
+  const sb = $('scriptText'); if (sb) sb.value = lines.join('\n');
+}
+
 function renderTimeline() {
   const inner = $('tlInner');
   const T = total() || 1;
@@ -872,9 +913,11 @@ function renderTimeline() {
   const vBlocks = state.segments.map(seg => {
     const left = seg.start * state.pxPerSec, w = (seg.end - seg.start) * state.pxPerSec;
     const sel = (seg.stockIndex != null && seg.stockIndex === state.selectedSplit) ? 'selected' : '';
-    const click = seg.stockIndex != null ? `onclick="selectSplit(${seg.stockIndex})"` : `onclick="clearSelection()"`;
+    const isSplit = seg.stockIndex != null;
+    const click = isSplit ? `onclick="selectSplit(${seg.stockIndex})"` : `onclick="clearSelection()"`;
     const label = seg.layout === 'full-darwin' ? 'Darwin' : `${seg.layout.replace('-', ' ')} \u00b7 clip ${seg.stockIndex + 1}`;
-    return `<div class="tl-block ${seg.layout} ${sel}" style="left:${left}px;width:${Math.max(2,w)}px" ${click} title="${label}">${w > 60 ? label : ''}</div>`;
+    const edges = isSplit ? `<div class="tl-edge l" data-stock="${seg.stockIndex}" data-edge="l"></div><div class="tl-edge r" data-stock="${seg.stockIndex}" data-edge="r"></div>` : '';
+    return `<div class="tl-block ${seg.layout} ${sel}" style="left:${left}px;width:${Math.max(2,w)}px" ${click} title="${label}">${edges}${w > 60 ? label : ''}</div>`;
   }).join('');
 
   const narrBlock = state.darwinUrl || p().darwinS3Key ? `<div class="tl-block narr" style="left:0px;width:${T*state.pxPerSec}px">narration (Darwin)</div>` : '';
@@ -889,7 +932,7 @@ function renderTimeline() {
     <div class="tl-playhead" id="tlPlayhead" style="left:${x(0)}px"></div>
     <div class="tl-playhead-grip" id="tlGrip" style="left:${x(0)}px"></div>`;
 
-  $('tlHint').textContent = 'click a clip in the preview to scale/position it; click a split block to change its layout';
+  $('tlHint').textContent = 'click a split to select it, drag its left/right edge to resize; click a clip in the preview to scale or position it';
 
   // seek by clicking ruler
   const ruler = $('tlRuler');
@@ -902,6 +945,31 @@ function renderTimeline() {
     const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
   };
+  // drag a split edge to resize it (edits the underlying [MM:SS] timing)
+  inner.querySelectorAll('.tl-edge').forEach(h => {
+    h.onmousedown = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const stockIdx = +h.dataset.stock, which = h.dataset.edge;
+      const seg = state.segments.find(s => s.stockIndex === stockIdx);
+      if (!seg) return;
+      const targetTime = which === 'l' ? seg.start : seg.end;
+      const markers = getMarkers();
+      let mi = -1, best = 0.08;
+      markers.forEach((m, k) => { const d = Math.abs(m.t - targetTime); if (d < best) { best = d; mi = k; } });
+      if (mi < 0) return; // edge sits at reel end with no marker, not resizable
+      const lo = mi > 0 ? markers[mi - 1].t + 0.4 : 0;
+      const hi = mi < markers.length - 1 ? markers[mi + 1].t - 0.4 : (T - 0.4);
+      const rulerRect = $('tlRuler').getBoundingClientRect();
+      const onMove = (ev) => {
+        let nt = ($('tlScroll').scrollLeft + ev.clientX - rulerRect.left - LBL) / state.pxPerSec;
+        nt = Math.max(lo, Math.min(hi, nt));
+        setMarkerTime(markers[mi].lineIdx, nt);
+        rebuildSegments(); renderTimeline(); paint();
+      };
+      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    };
+  });
   movePlayhead(darwinVid.src ? darwinVid.currentTime : 0);
 }
 function movePlayhead(t) {
