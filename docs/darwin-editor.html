@@ -12,7 +12,8 @@
   kbd { background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 3px; font-size: 10px; }
 
   /* ── layout shell ── */
-  .app { height: 100%; display: grid; grid-template-rows: 50px 1fr 200px; }
+  .app { height: 100%; display: grid; grid-template-rows: 50px 1fr 200px; grid-template-columns: minmax(0, 1fr); }
+  .app > * { min-width: 0; }
   .topbar { background: #1f1f22; border-bottom: 1px solid #2a2a2e; padding: 0 16px; display: flex; align-items: center; gap: 12px; }
   .topbar-brand { display: flex; align-items: center; gap: 9px; text-decoration: none; color: #EDF6FF; }
   .topbar-logo { width: 26px; height: 26px; background: #003B73; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-family: serif; }
@@ -182,7 +183,9 @@
       </div>
 
       <div class="rail-sec">
-        <div class="rail-title">Script <span style="color:#6b7280">re-parses live</span></div>
+        <div class="rail-title">Script <span style="color:#6b7280">from doc, or edit below</span></div>
+        <div style="margin:0 14px 8px"><button class="btn sm" id="importDocx" style="width:100%">Import .docx (footage column = split)</button></div>
+        <input type="file" id="fDocxEditor" accept=".docx" class="hidden" />
         <textarea class="script" id="scriptText" spellcheck="false"></textarea>
       </div>
     </div>
@@ -227,6 +230,7 @@
 <audio id="musicAud"></audio>
 <div class="toast" id="toast"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script src="js/darwin-parser.js"></script>
 <script src="js/darwin-api.js"></script>
 <script>
@@ -289,12 +293,13 @@ async function boot() {
 
   await resolveAssetUrls();
   rebuildSegments();
-  initTrim();
+  if ((p().darwinClips || []).length) patch({ darwinClips: [] }); // remove any stray reel-trim
   renderAssets();
   renderTimeline();
   renderInspector();
   wireMedia();
   initPreviewInteract();
+  wireDocImport();
   // Backfill duration if missing, once the darwin video reports metadata.
   maybeBackfillDuration();
   paint(); // draw frame 0 (sets edge visibility, time readout, playhead) before first play
@@ -434,7 +439,8 @@ function showPh(seg, hasDarwin, stockUrl) {
   const needStock = (seg.layout !== 'full-darwin') && !stockUrl;
   if (needDarwin || needStock) {
     if (!ph) { ph = document.createElement('div'); ph.id = 'framePh'; ph.className = 'ph'; ph.style.zIndex = 3; $('frame').appendChild(ph); }
-    ph.textContent = needDarwin ? 'Darwin video unavailable' : 'Stock clip missing';
+    const hint = (p().footageHints || [])[seg.stockIndex];
+    ph.textContent = needDarwin ? 'Darwin video unavailable' : (hint ? 'Add stock: ' + hint : 'Stock clip missing');
     ph.style.display = 'flex';
   } else if (ph) { ph.style.display = 'none'; }
 }
@@ -468,11 +474,10 @@ function paint() {
 
 function loop() {
   if (state.playing) {
-    if (darwinVid.currentTime >= state.trimOut - 0.02) {
-      stopPlayback();
-      if ($('loopChk').checked) { seek(state.trimIn); play(); }
-      else { seek(state.trimOut); }
-    } else { paint(); }
+    if (darwinVid.src && darwinVid.currentTime >= total() - 0.05) {
+      if ($('loopChk') && $('loopChk').checked) { seek(0); }
+      else { stopPlayback(); }
+    } else paint();
   }
   requestAnimationFrame(loop);
 }
@@ -480,12 +485,6 @@ function loop() {
 // transport
 function play() {
   if (!darwinVid.src) return;
-  // start inside the kept window
-  if (darwinVid.currentTime < state.trimIn - 0.01 || darwinVid.currentTime >= state.trimOut - 0.01) {
-    darwinVid.currentTime = state.trimIn;
-    if (state.musicUrl) musicAud.currentTime = state.trimIn;
-    lastStockIndex = -2;
-  }
   state.playing = true; $('playBtn').innerHTML = '&#10073;&#10073;';
   darwinVid.play().catch(()=>{});
   if (state.musicUrl) { musicAud.currentTime = darwinVid.currentTime; musicAud.play().catch(()=>{}); }
@@ -513,7 +512,9 @@ function renderAssets() {
   // stock list
   const keys = p().stockS3Keys || [], names = p().stockNames || [];
   $('stockCount').textContent = `(${keys.length}/${state.stockClipsNeeded || 0} needed)`;
-  $('stockList').innerHTML = keys.map((k, i) => `
+  const hints = p().footageHints || [];
+  const hintHtml = hints.length ? `<div class="insp-meta" style="padding:8px 14px 0;line-height:1.5">Footage plan (add clips in this order):<br>${hints.map((h,i)=>`<span style="color:#94a3b8">${i+1}.</span> ${escapeHtml(h)}`).join('<br>')}</div>` : '';
+  $('stockList').innerHTML = (keys.map((k, i) => `
     <div class="stock-row ${state.selectedSplit === i ? 'active' : ''}">
       <span class="stock-idx">${i + 1}</span>
       <span class="name" title="${escapeHtml(names[i] || k)}">${escapeHtml(names[i] || 'clip ' + (i + 1))}</span>
@@ -521,7 +522,7 @@ function renderAssets() {
       <button class="icon-btn" title="down" onclick="moveStock(${i},1)" ${i === keys.length - 1 ? 'disabled' : ''}>&#9660;</button>
       <button class="icon-btn" title="swap" onclick="swapStock(${i})">&#8635;</button>
       <button class="icon-btn del" title="delete" onclick="deleteStock(${i})">&times;</button>
-    </div>`).join('') || '<div class="insp-meta" style="padding:0 14px">no stock clips yet</div>';
+    </div>`).join('') || '<div class="insp-meta" style="padding:0 14px">no stock clips yet</div>') + hintHtml;
   $('musicName').textContent = p().musicName || 'none';
   $('rmMusic').classList.toggle('hidden', !p().musicS3Key);
 }
@@ -668,6 +669,47 @@ function initPreviewInteract() {
   }, { passive: false });
 }
 
+function docHtmlToRows(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const table = doc.querySelector('table');
+  if (!table) return [];
+  const rows = [];
+  Array.from(table.querySelectorAll('tr')).forEach((tr, idx) => {
+    const cells = Array.from(tr.querySelectorAll('td,th')).map(c => c.textContent.trim());
+    if (!cells.length) return;
+    const joined = cells.join(' ').toLowerCase();
+    if (idx === 0 && /script|footage|suggested|^#/.test(joined)) return; // header
+    let line, footage;
+    if (cells.length >= 3) { line = cells[1]; footage = cells[2]; }
+    else if (cells.length === 2) { line = cells[0]; footage = cells[1]; }
+    else { line = cells[0]; footage = ''; }
+    rows.push({ line, footage });
+  });
+  return rows;
+}
+function wireDocImport() {
+  const btn = $('importDocx'); if (!btn) return;
+  btn.onclick = () => $('fDocxEditor').click();
+  $('fDocxEditor').onchange = async () => {
+    const f = $('fDocxEditor').files[0]; $('fDocxEditor').value = '';
+    if (!f) return;
+    if (!window.mammoth) { toast('Doc importer still loading, try again', 'error'); return; }
+    toast('Reading doc\u2026');
+    try {
+      const buf = await f.arrayBuffer();
+      const { value: html } = await window.mammoth.convertToHtml({ arrayBuffer: buf });
+      const rows = docHtmlToRows(html);
+      if (!rows.length) { toast('No table found in that doc', 'error'); return; }
+      const dur = total() || p().totalDuration || 0;
+      const { script, footageHints, splitCount } = docRowsToScript(rows, dur);
+      $('scriptText').value = script;
+      patch({ scriptText: script, footageHints });
+      rebuildSegments(); renderTimeline(); renderAssets(); renderInspector(); paint();
+      toast(`Imported ${splitCount} split${splitCount === 1 ? '' : 's'} from doc`, 'success');
+    } catch (e) { toast('Import failed: ' + e.message, 'error'); }
+  };
+}
+
 function setLayout(idx, layout) {
   const ov = { ...(p().layoutOverrides || {}) };
   ov[idx] = layout;
@@ -692,34 +734,26 @@ function renderTimeline() {
 
   // video lane blocks
   const vBlocks = state.segments.map(seg => {
-    const left = x(seg.start), w = (seg.end - seg.start) * state.pxPerSec;
+    const left = seg.start * state.pxPerSec, w = (seg.end - seg.start) * state.pxPerSec;
     const sel = (seg.stockIndex != null && seg.stockIndex === state.selectedSplit) ? 'selected' : '';
     const click = seg.stockIndex != null ? `onclick="selectSplit(${seg.stockIndex})"` : `onclick="clearSelection()"`;
     const label = seg.layout === 'full-darwin' ? 'Darwin' : `${seg.layout.replace('-', ' ')} \u00b7 clip ${seg.stockIndex + 1}`;
     return `<div class="tl-block ${seg.layout} ${sel}" style="left:${left}px;width:${Math.max(2,w)}px" ${click} title="${label}">${w > 60 ? label : ''}</div>`;
   }).join('');
 
-  const narrBlock = state.darwinUrl || p().darwinS3Key ? `<div class="tl-block narr" style="left:${x(0)}px;width:${T*state.pxPerSec}px">narration (Darwin)</div>` : '';
-  const musicBlock = p().musicS3Key ? `<div class="tl-block music" style="left:${x(0)}px;width:${T*state.pxPerSec}px">${escapeHtml(p().musicName||'music')}</div>` : '';
+  const narrBlock = state.darwinUrl || p().darwinS3Key ? `<div class="tl-block narr" style="left:0px;width:${T*state.pxPerSec}px">narration (Darwin)</div>` : '';
+  const musicBlock = p().musicS3Key ? `<div class="tl-block music" style="left:0px;width:${T*state.pxPerSec}px">${escapeHtml(p().musicName||'music')}</div>` : '';
 
   inner.style.width = (W + 20) + 'px';
-  const dimL = state.trimIn > 0.01 ? `<div class="tl-dim" style="left:${x(0)}px;width:${state.trimIn * state.pxPerSec}px"></div>` : '';
-  const dimR = state.trimOut < T - 0.01 ? `<div class="tl-dim" style="left:${x(state.trimOut)}px;width:${Math.max(0, (T - state.trimOut) * state.pxPerSec)}px"></div>` : '';
   inner.innerHTML = `
     <div class="tl-ruler" id="tlRuler">${ticks}</div>
     <div class="tl-row"><div class="tl-rowlabel">Video</div><div class="tl-lane">${vBlocks}</div></div>
     <div class="tl-row"><div class="tl-rowlabel">Narration</div><div class="tl-lane">${narrBlock}</div></div>
     <div class="tl-row"><div class="tl-rowlabel">Music</div><div class="tl-lane">${musicBlock || '<div class="insp-meta" style="padding-left:8px;align-self:center">none</div>'}</div></div>
-    ${dimL}${dimR}
-    <div class="tl-trim left" id="tlTrimL" style="left:${x(state.trimIn)}px" title="trim start"></div>
-    <div class="tl-trim right" id="tlTrimR" style="left:${x(state.trimOut)}px" title="trim end"></div>
     <div class="tl-playhead" id="tlPlayhead" style="left:${x(0)}px"></div>
     <div class="tl-playhead-grip" id="tlGrip" style="left:${x(0)}px"></div>`;
 
-  // output-duration / trim readout
-  $('tlHint').innerHTML = isTrimmed()
-    ? `output ${fmtTime(outputDuration())} (trimmed from ${fmtTime(T)}) <a href="#" onclick="resetTrim();return false" style="color:#66B0FF;margin-left:6px">reset trim</a>`
-    : 'drag the green handles to trim; click a split block to change its layout';
+  $('tlHint').textContent = 'click a clip in the preview to scale/position it; click a split block to change its layout';
 
   // seek by clicking ruler
   const ruler = $('tlRuler');
@@ -732,25 +766,6 @@ function renderTimeline() {
     const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
   };
-  // drag trim handles (source-time)
-  const dragTrim = (el, which) => {
-    if (!el) return;
-    el.onmousedown = (e) => {
-      e.preventDefault(); const r = ruler.getBoundingClientRect();
-      const onMove = (ev) => {
-        let tt = ($('tlScroll').scrollLeft + ev.clientX - r.left - LBL) / state.pxPerSec;
-        tt = Math.max(0, Math.min(T, tt));
-        if (which === 'L') state.trimIn = Math.min(tt, state.trimOut - 0.5);
-        else state.trimOut = Math.max(tt, state.trimIn + 0.5);
-        renderTimeline();
-        seek(which === 'L' ? state.trimIn : Math.max(state.trimIn, state.trimOut - 0.05));
-      };
-      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); saveTrim(); };
-      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
-    };
-  };
-  dragTrim($('tlTrimL'), 'L');
-  dragTrim($('tlTrimR'), 'R');
   movePlayhead(darwinVid.src ? darwinVid.currentTime : 0);
 }
 function movePlayhead(t) {

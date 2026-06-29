@@ -250,16 +250,44 @@ wireDrop('dzMusic', 'fMusic', (files) => {
 $('tabPaste').onclick = () => { state.scriptMode = 'paste'; $('tabPaste').classList.add('active'); $('tabDocx').classList.remove('active'); $('scriptText').classList.remove('hidden'); $('docxZone').classList.add('hidden'); refresh(); };
 $('tabDocx').onclick = () => { state.scriptMode = 'docx'; $('tabDocx').classList.add('active'); $('tabPaste').classList.remove('active'); $('docxZone').classList.remove('hidden'); $('scriptText').classList.remove('hidden'); refresh(); };
 $('scriptText').addEventListener('input', refresh);
+function docHtmlToRows(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const table = doc.querySelector('table');
+  if (!table) return [];
+  const rows = [];
+  Array.from(table.querySelectorAll('tr')).forEach((tr, idx) => {
+    const cells = Array.from(tr.querySelectorAll('td,th')).map(c => c.textContent.trim());
+    if (!cells.length) return;
+    const joined = cells.join(' ').toLowerCase();
+    if (idx === 0 && /script|footage|suggested|^#/.test(joined)) return;
+    let line, footage;
+    if (cells.length >= 3) { line = cells[1]; footage = cells[2]; }
+    else if (cells.length === 2) { line = cells[0]; footage = cells[1]; }
+    else { line = cells[0]; footage = ''; }
+    rows.push({ line, footage });
+  });
+  return rows;
+}
 wireDrop('dzDocx', 'fDocx', async (files) => {
   state.docxFile = files[0]; state.scriptName = state.docxFile.name;
   const dz = $('dzDocx'); dz.classList.add('has-file');
-  dz.innerHTML = `<div class="dropzone-title"><span>&#9989;</span><span class="dropzone-filename">${escapeHtml(state.docxFile.name)}</span></div><div class="dropzone-meta">extracting&hellip;</div>`;
+  dz.innerHTML = `<div class="dropzone-title"><span>&#9989;</span><span class="dropzone-filename">${escapeHtml(state.docxFile.name)}</span></div><div class="dropzone-meta">reading&hellip;</div>`;
   try {
     const buf = await state.docxFile.arrayBuffer();
-    const res = await window.mammoth.extractRawText({ arrayBuffer: buf });
-    $('scriptText').value = res.value || '';
-    dz.querySelector('.dropzone-meta').textContent = `${(res.value || '').split(/\r?\n/).filter(Boolean).length} lines extracted`;
-  } catch (e) { dz.querySelector('.dropzone-meta').textContent = 'extract failed: ' + e.message; }
+    const { value: html } = await window.mammoth.convertToHtml({ arrayBuffer: buf });
+    const rows = docHtmlToRows(html);
+    if (rows.length) {
+      const { script, footageHints, splitCount } = docRowsToScript(rows, state.darwinDuration || 0);
+      $('scriptText').value = script;
+      state.footageHints = footageHints;
+      dz.querySelector('.dropzone-meta').textContent = `${rows.length} rows, ${splitCount} split${splitCount === 1 ? '' : 's'} from footage column`;
+    } else {
+      const res = await window.mammoth.extractRawText({ arrayBuffer: buf });
+      $('scriptText').value = res.value || '';
+      state.footageHints = [];
+      dz.querySelector('.dropzone-meta').textContent = 'no table found, imported as plain text';
+    }
+  } catch (e) { dz.querySelector('.dropzone-meta').textContent = 'import failed: ' + e.message; }
   refresh();
 });
 
@@ -338,6 +366,7 @@ $('createBtn').onclick = async () => {
       stockS3Keys, stockNames,
       musicS3Key, musicName,
       scriptText: currentScript(), scriptName,
+      footageHints: state.footageHints || [],
       totalDuration: state.darwinDuration || 0,
       defaultLayout: 'stock-top', musicVolume: 0.15,
     });

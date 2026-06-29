@@ -215,6 +215,47 @@ function applyDarwinClips(plan, darwinClips, sourceTotal) {
   return { segments, captions, darwinClips: clips, outputDuration };
 }
 
+// =============================================================================
+// Doc -> script. The shared content doc is a table: each row has a SCRIPT LINE
+// and a SUGGESTED FOOTAGE cell. Footage empty / "no footage" / dash = full-frame
+// Darwin; footage named = a split (stock slot). This converts parsed table rows
+// into the [MM:SS] + /split grammar the rest of the pipeline already consumes,
+// estimating per-line start times by word-count across the take (refine on the
+// timeline, or later via audio alignment). Returns { script, footageHints }.
+// =============================================================================
+function docCountWords(s) { return (s || '').trim().split(/\s+/).filter(Boolean).length; }
+function docIsNoFootage(s) {
+  const t = (s || '').trim().toLowerCase();
+  if (!t) return true;
+  if (['-', '\u2013', '\u2014', 'n/a', 'na', 'none', 'nil'].includes(t)) return true;
+  return /\bno (footage|stock|clip)\b|none needed|not needed|host on camera|title card/.test(t);
+}
+function docCleanLine(s) { return (s || '').replace(/^\s*\[[^\]]*\]\s*/, '').replace(/\s*[\u2013\u2014]\s*/g, ', ').replace(/\s+/g, ' ').trim(); }
+
+function docRowsToScript(rows, totalDuration) {
+  const clean = (rows || [])
+    .map(r => ({ line: docCleanLine(r.line), split: !docIsNoFootage(r.footage), footage: (r.footage || '').trim() }))
+    .filter(r => r.line.length > 0);
+  const words = clean.map(r => Math.max(1, docCountWords(r.line)));
+  const sum = words.reduce((a, b) => a + b, 0) || 1;
+  const total = (totalDuration && totalDuration > 0) ? totalDuration : Math.max(8, Math.round(sum / 2.5));
+  let cum = 0; const starts = [];
+  for (let i = 0; i < clean.length; i++) { starts.push(total * (cum / sum)); cum += words[i]; }
+  const fmt = (sec) => { const m = Math.floor(sec / 60), s = Math.round(sec % 60); return `[${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}]`; };
+  const out = []; const footageHints = []; let open = false;
+  for (let i = 0; i < clean.length; i++) {
+    const ts = fmt(starts[i]);
+    if (clean[i].split) {
+      out.push(`${ts} /split start`); out.push(clean[i].line);
+      footageHints.push(clean[i].footage); open = true;
+    } else {
+      if (open) { out.push(`${ts} /split end`); open = false; } else { out.push(ts); }
+      out.push(clean[i].line);
+    }
+  }
+  return { script: out.join('\n'), footageHints, splitCount: footageHints.length };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseDarwinScript, buildRenderPlan, resolveDarwinClips, applyDarwinClips };
+  module.exports = { parseDarwinScript, buildRenderPlan, resolveDarwinClips, applyDarwinClips, docRowsToScript };
 }
