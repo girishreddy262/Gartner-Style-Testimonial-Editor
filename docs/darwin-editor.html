@@ -65,7 +65,7 @@
   .slot.sel { outline: 2px solid #0183FF; outline-offset: -2px; z-index: 4; }
   .slot video { position: absolute; inset: 0; width: 100%; height: 100%; }
   .frame .ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #3a4654; font-family: monospace; font-size: 13px; background: #11161d; }
-  .frame .cap { position: absolute; left: 6%; right: 6%; display: flex; justify-content: center; pointer-events: none; }
+  .frame .cap { position: absolute; left: 6%; right: 6%; display: flex; justify-content: center; pointer-events: none; z-index: 6; }
   .frame .cap span { background: rgba(0,0,0,0.55); border-radius: 10px; color: #fff; text-align: center; line-height: 1.25; padding: 2.2% 4%; max-width: 88%; }
   .edge { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: rgba(255,255,255,0.18); pointer-events: none; z-index: 5; }
 
@@ -127,6 +127,23 @@
   .tl-trim.right::before { left: 4px; }
 
   .toast { position: fixed; bottom: 18px; right: 18px; background: #232327; border: 1px solid #383840; color: #EDF6FF; padding: 10px 16px; border-radius: 8px; font-size: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); z-index: 100; opacity: 0; transform: translateY(8px); transition: all .2s; }
+  /* trim preview popup */
+  .trim-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.66); display: flex; align-items: center; justify-content: center; z-index: 200; }
+  .trim-modal.hidden { display: none; }
+  .trim-panel { background: #1a1a1c; border: 1px solid #2a2a2e; border-radius: 12px; width: min(680px, 92vw); padding: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
+  .trim-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-weight: 700; color: #EDF6FF; font-size: 13px; }
+  .trim-head button { background: none; border: 0; color: #94a3b8; font-size: 22px; line-height: 1; cursor: pointer; }
+  .trim-video-wrap { background: #000; border-radius: 8px; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 200px; }
+  .trim-video-wrap video { max-height: 44vh; max-width: 100%; display: block; }
+  .trim-controls { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+  .trim-bar { position: relative; flex: 1; height: 38px; background: #232327; border-radius: 6px; cursor: pointer; user-select: none; }
+  .trim-dim { position: absolute; top: 0; bottom: 0; background: rgba(0,0,0,0.55); border-radius: 6px; pointer-events: none; }
+  .trim-sel { position: absolute; top: 0; bottom: 0; border: 2px solid #2AB397; border-radius: 6px; pointer-events: none; }
+  .trim-handle { position: absolute; top: -2px; bottom: -2px; width: 14px; margin-left: -7px; background: #2AB397; border-radius: 4px; cursor: ew-resize; z-index: 3; box-shadow: 0 1px 4px rgba(0,0,0,0.5); }
+  .trim-ph { position: absolute; top: 0; bottom: 0; width: 2px; background: #FC6A6B; z-index: 2; pointer-events: none; }
+  .trim-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+  .btn.primary { background: #0183FF; color: #fff; border-color: #0183FF; }
+  .btn.primary:hover { background: #0166CC; }
   .toast.show { opacity: 1; transform: translateY(0); }
   .toast.error { border-color: #7f2a2a; }
   .toast.success { border-color: #2a7f4a; }
@@ -230,6 +247,31 @@
 <audio id="musicAud"></audio>
 <div class="toast" id="toast"></div>
 
+<div class="trim-modal hidden" id="trimModal">
+  <div class="trim-panel">
+    <div class="trim-head"><span id="trimTitle">Trim clip</span><button id="trimClose" title="close">&times;</button></div>
+    <div class="trim-video-wrap"><video id="trimVid" muted playsinline></video></div>
+    <div class="trim-controls">
+      <button class="play-btn" id="trimPlay" style="flex:0 0 auto">&#9658;</button>
+      <span class="time-read" id="trimTime">0:00 / 0:00</span>
+      <div class="trim-bar" id="trimBar">
+        <div class="trim-dim" id="trimDimL"></div>
+        <div class="trim-dim" id="trimDimR"></div>
+        <div class="trim-sel" id="trimSel"></div>
+        <div class="trim-ph" id="trimPhEl"></div>
+        <div class="trim-handle" id="trimHIn" title="start"></div>
+        <div class="trim-handle" id="trimHOut" title="end"></div>
+      </div>
+    </div>
+    <div class="trim-foot">
+      <span class="seg-read" id="trimRead"></span>
+      <div class="spacer" style="flex:1"></div>
+      <button class="btn sm" id="trimCancel">Cancel</button>
+      <button class="btn sm primary" id="trimSave">Done</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script src="js/darwin-parser.js"></script>
 <script src="js/darwin-api.js"></script>
@@ -300,6 +342,7 @@ async function boot() {
   wireMedia();
   initPreviewInteract();
   wireDocImport();
+  wireTrimPopup();
   // Backfill duration if missing, once the darwin video reports metadata.
   maybeBackfillDuration();
   paint(); // draw frame 0 (sets edge visibility, time readout, playhead) before first play
@@ -440,8 +483,10 @@ function showPh(seg, hasDarwin, stockUrl) {
   if (needDarwin || needStock) {
     if (!ph) { ph = document.createElement('div'); ph.id = 'framePh'; ph.className = 'ph'; ph.style.zIndex = 3; $('frame').appendChild(ph); }
     const hint = (p().footageHints || [])[seg.stockIndex];
-    ph.textContent = needDarwin ? 'Darwin video unavailable' : (hint ? 'Add stock: ' + hint : 'Stock clip missing');
+    ph.textContent = needDarwin ? 'Darwin video unavailable' : (hint ? 'Tap to add: ' + hint : 'Tap to add stock clip');
     ph.style.display = 'flex';
+    if (needStock && !needDarwin) { ph.style.cursor = 'pointer'; ph.onclick = () => $('fStock').click(); }
+    else { ph.style.cursor = 'default'; ph.onclick = null; }
   } else if (ph) { ph.style.display = 'none'; }
 }
 
@@ -509,20 +554,38 @@ document.addEventListener('keydown', e => { if (e.code === 'Space' && e.target.t
 function renderAssets() {
   $('darwinName').textContent = p().darwinName || (p().darwinS3Key ? 'darwin video' : 'none');
   $('darwinSub').textContent = total() ? `duration ${fmtTime(total())}` : 'duration pending';
-  // stock list
+  // stock list: one row per split slot, footage hint inline (no separate block)
   const keys = p().stockS3Keys || [], names = p().stockNames || [];
-  $('stockCount').textContent = `(${keys.length}/${state.stockClipsNeeded || 0} needed)`;
   const hints = p().footageHints || [];
-  const hintHtml = hints.length ? `<div class="insp-meta" style="padding:8px 14px 0;line-height:1.5">Footage plan (add clips in this order):<br>${hints.map((h,i)=>`<span style="color:#94a3b8">${i+1}.</span> ${escapeHtml(h)}`).join('<br>')}</div>` : '';
-  $('stockList').innerHTML = (keys.map((k, i) => `
+  const needed = state.stockClipsNeeded || 0;
+  $('stockCount').textContent = `(${keys.length}/${needed} needed)`;
+  const n = Math.max(needed, keys.length);
+  const rows = [];
+  for (let i = 0; i < n; i++) {
+    const has = i < keys.length && keys[i];
+    const hint = hints[i] || '';
+    if (has) {
+      rows.push(`
     <div class="stock-row ${state.selectedSplit === i ? 'active' : ''}">
       <span class="stock-idx">${i + 1}</span>
-      <span class="name" title="${escapeHtml(names[i] || k)}">${escapeHtml(names[i] || 'clip ' + (i + 1))}</span>
+      <span class="name" title="${escapeHtml(names[i] || keys[i])}">${escapeHtml(names[i] || 'clip ' + (i + 1))}</span>
+      <button class="icon-btn" title="trim" onclick="openTrimPopup(${i})">&#9986;</button>
       <button class="icon-btn" title="up" onclick="moveStock(${i},-1)" ${i === 0 ? 'disabled' : ''}>&#9650;</button>
-      <button class="icon-btn" title="down" onclick="moveStock(${i},1)" ${i === keys.length - 1 ? 'disabled' : ''}>&#9660;</button>
-      <button class="icon-btn" title="swap" onclick="swapStock(${i})">&#8635;</button>
+      <button class="icon-btn" title="down" onclick="moveStock(${i},1)" ${i >= keys.length - 1 ? 'disabled' : ''}>&#9660;</button>
+      <button class="icon-btn" title="replace" onclick="swapStock(${i})">&#8635;</button>
       <button class="icon-btn del" title="delete" onclick="deleteStock(${i})">&times;</button>
-    </div>`).join('') || '<div class="insp-meta" style="padding:0 14px">no stock clips yet</div>') + hintHtml;
+    </div>${hint ? `<div class="insp-meta" style="padding:1px 14px 7px 42px">${escapeHtml(hint)}</div>` : ''}`);
+    } else {
+      const isNext = i === keys.length;
+      rows.push(`
+    <div class="stock-row" style="${isNext ? '' : 'opacity:.55'}">
+      <span class="stock-idx" style="background:#232327;color:#6b7280">${i + 1}</span>
+      <span class="name" style="color:#6b7280" title="${escapeHtml(hint)}">${hint ? escapeHtml(hint.slice(0, 42)) : 'empty slot'}</span>
+      ${isNext ? `<button class="icon-btn" title="add clip for this slot" onclick="$('fStock').click()" style="width:auto;padding:0 8px">+ add</button>` : ''}
+    </div>`);
+    }
+  }
+  $('stockList').innerHTML = rows.join('') || '<div class="insp-meta" style="padding:0 14px">no splits yet, import a doc or add /split markers in the script</div>';
   $('musicName').textContent = p().musicName || 'none';
   $('rmMusic').classList.toggle('hidden', !p().musicS3Key);
 }
@@ -599,30 +662,110 @@ function renderClipInspector(insp, key) {
       </div>` : '';
   const trimRow = isStock ? `
       <div class="insp-h">Trim (stock source)</div>
-      <div class="num-row">
-        <div class="field"><label>In (s)</label><input type="number" id="txTrimIn" min="0" step="0.1" value="${t.trimIn}"></div>
-        <div class="field"><label>Out (s)</label><input type="number" id="txTrimOut" min="0" step="0.1" value="${t.trimOut}"></div>
-      </div>
-      <div class="insp-meta">Out 0 means play from In for the slot length.</div>` : '';
+      <button class="btn sm" id="txTrimBtn" style="width:100%">Trim clip with preview</button>
+      <div class="insp-meta" id="txTrimMeta" style="margin-top:6px">${(t.trimIn || t.trimOut) ? `in ${fmtTime(t.trimIn)}${t.trimOut ? ' \u2013 out ' + fmtTime(t.trimOut) : ''}` : 'full clip'}</div>` : '';
   insp.innerHTML = `
     <div class="insp-sec">
       <div class="insp-h">${label}</div>
-      <div class="insp-meta">${seg ? `${fmtTime(seg.start)} \u2013 ${fmtTime(seg.end)}` : 'whole reel'} \u00b7 drag in preview to pan, scroll to zoom</div>
+      <div class="insp-meta">${seg ? `${fmtTime(seg.start)} \u2013 ${fmtTime(seg.end)}` : 'whole reel'} \u00b7 drag in preview to pan</div>
       ${layoutGrid}
       <div class="insp-h">Frame</div>
       <div class="field"><label>Scale <span class="val" id="txScaleVal">${Math.round(t.scale * 100)}%</span></label><input type="range" id="txScale" min="50" max="400" value="${Math.round(t.scale * 100)}"></div>
       <div class="field"><label>Position X <span class="val" id="txXVal">${t.x}%</span></label><input type="range" id="txX" min="-50" max="50" value="${t.x}"></div>
       <div class="field"><label>Position Y <span class="val" id="txYVal">${t.y}%</span></label><input type="range" id="txY" min="-50" max="50" value="${t.y}"></div>
       ${trimRow}
-      <button class="reset-link" onclick="resetClipTx('${key}')">reset framing</button>
+      <button class="reset-link" onclick="resetClipTx('${key}')" style="margin-top:10px">reset framing</button>
       <div class="insp-meta" style="margin-top:8px"><a href="#" onclick="clearSelection();return false" style="color:#66B0FF">done</a></div>
     </div>`;
   const bind = (id, fn) => { const el = $(id); if (el) el.oninput = fn; };
   bind('txScale', e => { setClipTx(key, { scale: +(e.target.value / 100).toFixed(2) }); $('txScaleVal').textContent = e.target.value + '%'; applyTransforms(); });
   bind('txX', e => { setClipTx(key, { x: +e.target.value }); $('txXVal').textContent = e.target.value + '%'; applyTransforms(); });
   bind('txY', e => { setClipTx(key, { y: +e.target.value }); $('txYVal').textContent = e.target.value + '%'; applyTransforms(); });
-  bind('txTrimIn', e => { setClipTx(key, { trimIn: Math.max(0, +e.target.value || 0) }); lastStockIndex = -2; paint(); });
-  bind('txTrimOut', e => { setClipTx(key, { trimOut: Math.max(0, +e.target.value || 0) }); lastStockIndex = -2; paint(); });
+  const tb = $('txTrimBtn'); if (tb) tb.onclick = () => openTrimPopup(idx);
+}
+
+// =============================================================================
+// Trim preview popup (stock clips only): shows the clip with draggable
+// in/out handles over a scrubbable bar, so you set the range by eye.
+// =============================================================================
+const trimState = { index: null, dur: 0, in: 0, out: 0, playing: false };
+const trimVidEl = $('trimVid');
+function openTrimPopup(idx) {
+  if (idx == null) return;
+  const url = state.stockUrls[idx];
+  if (!url) { toast('Add this stock clip first, then trim', 'error'); return; }
+  const t = clipTx(`stock-${idx}`);
+  trimState.index = idx;
+  const hint = (p().footageHints || [])[idx];
+  $('trimTitle').textContent = `Trim stock clip ${idx + 1}` + (hint ? ' \u00b7 ' + hint.slice(0, 38) : '');
+  $('trimModal').classList.remove('hidden');
+  trimVidEl.src = url;
+  trimVidEl.onloadedmetadata = () => {
+    trimState.dur = (isFinite(trimVidEl.duration) && trimVidEl.duration > 0) ? trimVidEl.duration : 10;
+    trimState.in = Math.min(t.trimIn || 0, trimState.dur);
+    trimState.out = (t.trimOut && t.trimOut > (t.trimIn || 0)) ? Math.min(t.trimOut, trimState.dur) : trimState.dur;
+    try { trimVidEl.currentTime = trimState.in; } catch (_) {}
+    renderTrimBar();
+  };
+}
+function closeTrimPopup() {
+  trimVidEl.pause(); trimState.playing = false; $('trimPlay').innerHTML = '&#9658;';
+  trimVidEl.removeAttribute('src'); try { trimVidEl.load(); } catch (_) {}
+  $('trimModal').classList.add('hidden');
+}
+function renderTrimBar() {
+  const dur = trimState.dur || 1;
+  const pc = (s) => (s / dur * 100) + '%';
+  $('trimDimL').style.left = '0'; $('trimDimL').style.width = pc(trimState.in);
+  $('trimDimR').style.left = pc(trimState.out); $('trimDimR').style.right = '0';
+  $('trimSel').style.left = pc(trimState.in); $('trimSel').style.width = ((trimState.out - trimState.in) / dur * 100) + '%';
+  $('trimHIn').style.left = pc(trimState.in); $('trimHOut').style.left = pc(trimState.out);
+  $('trimPhEl').style.left = pc(trimVidEl.currentTime || trimState.in);
+  $('trimRead').textContent = `in ${fmtTime(trimState.in)}  \u2013  out ${fmtTime(trimState.out)}  (${(trimState.out - trimState.in).toFixed(1)}s of ${fmtTime(dur)})`;
+  $('trimTime').textContent = `${fmtTime(trimVidEl.currentTime || 0)} / ${fmtTime(dur)}`;
+}
+function wireTrimPopup() {
+  const bar = $('trimBar');
+  const xToTime = (clientX) => { const r = bar.getBoundingClientRect(); return Math.max(0, Math.min(trimState.dur, (clientX - r.left) / r.width * trimState.dur)); };
+  const dragHandle = (el, which) => {
+    el.onmousedown = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const onMove = (ev) => {
+        const tt = xToTime(ev.clientX);
+        if (which === 'in') trimState.in = Math.max(0, Math.min(tt, trimState.out - 0.2));
+        else trimState.out = Math.min(trimState.dur, Math.max(tt, trimState.in + 0.2));
+        try { trimVidEl.currentTime = which === 'in' ? trimState.in : trimState.out; } catch (_) {}
+        renderTrimBar();
+      };
+      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    };
+  };
+  dragHandle($('trimHIn'), 'in'); dragHandle($('trimHOut'), 'out');
+  bar.onclick = (e) => {
+    if (e.target.classList.contains('trim-handle')) return;
+    const tt = xToTime(e.clientX);
+    try { trimVidEl.currentTime = Math.max(trimState.in, Math.min(trimState.out, tt)); } catch (_) {}
+    renderTrimBar();
+  };
+  $('trimPlay').onclick = () => {
+    if (trimState.playing) { trimVidEl.pause(); trimState.playing = false; $('trimPlay').innerHTML = '&#9658;'; }
+    else { if (trimVidEl.currentTime < trimState.in || trimVidEl.currentTime >= trimState.out) { try { trimVidEl.currentTime = trimState.in; } catch (_) {} } trimVidEl.play().catch(()=>{}); trimState.playing = true; $('trimPlay').innerHTML = '&#10073;&#10073;'; }
+  };
+  trimVidEl.addEventListener('timeupdate', () => {
+    if (trimState.playing && trimVidEl.currentTime >= trimState.out) { try { trimVidEl.currentTime = trimState.in; } catch (_) {} }
+    if (!$('trimModal').classList.contains('hidden')) renderTrimBar();
+  });
+  $('trimSave').onclick = () => {
+    const idx = trimState.index; if (idx == null) return;
+    const full = trimState.in <= 0.05 && trimState.out >= trimState.dur - 0.05;
+    setClipTx(`stock-${idx}`, { trimIn: full ? 0 : +trimState.in.toFixed(2), trimOut: full ? 0 : +trimState.out.toFixed(2) });
+    lastStockIndex = -2; closeTrimPopup(); renderInspector(); paint();
+    toast('Trim saved', 'success');
+  };
+  $('trimCancel').onclick = closeTrimPopup;
+  $('trimClose').onclick = closeTrimPopup;
+  $('trimModal').onclick = (e) => { if (e.target === $('trimModal')) closeTrimPopup(); };
 }
 
 function selectClipFromSlot(which) {
@@ -660,13 +803,6 @@ function initPreviewInteract() {
   };
   dSlot.addEventListener('mousedown', startDrag('d'));
   sSlot.addEventListener('mousedown', startDrag('s'));
-  frame.addEventListener('wheel', (e) => {
-    if (!state.selectedClip) return;
-    e.preventDefault();
-    const cur = clipTx(state.selectedClip).scale;
-    const next = Math.max(0.5, Math.min(4, +(cur + (e.deltaY < 0 ? 0.05 : -0.05)).toFixed(2)));
-    setClipTx(state.selectedClip, { scale: next }); applyTransforms(); renderInspector();
-  }, { passive: false });
 }
 
 function docHtmlToRows(html) {
