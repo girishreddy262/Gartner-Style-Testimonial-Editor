@@ -111,6 +111,11 @@
   .tl-block.music { background: rgba(247,181,56,0.16); border: 1px solid #6b5520; color: #F7B538; top: 10px; bottom: 10px; }
   .tl-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #FC6A6B; z-index: 8; pointer-events: none; box-shadow: 0 0 6px rgba(252,106,107,0.6); }
   .tl-playhead-grip { position: absolute; top: 0; width: 11px; height: 22px; margin-left: -5px; background: transparent; cursor: ew-resize; z-index: 9; }
+  .tl-dim { position: absolute; top: 22px; bottom: 0; background: repeating-linear-gradient(45deg, rgba(0,0,0,0.55), rgba(0,0,0,0.55) 6px, rgba(20,20,22,0.55) 6px, rgba(20,20,22,0.55) 12px); z-index: 7; pointer-events: none; }
+  .tl-trim { position: absolute; top: 22px; bottom: 0; width: 10px; margin-left: -5px; z-index: 10; cursor: ew-resize; }
+  .tl-trim::before { content: ''; position: absolute; left: 4px; top: 0; bottom: 0; width: 2px; background: #2AB397; }
+  .tl-trim::after { content: ''; position: absolute; left: 0; top: calc(50% - 9px); width: 10px; height: 18px; border-radius: 3px; background: #2AB397; }
+  .tl-trim.right::before { left: 4px; }
 
   .toast { position: fixed; bottom: 18px; right: 18px; background: #232327; border: 1px solid #383840; color: #EDF6FF; padding: 10px 16px; border-radius: 8px; font-size: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); z-index: 100; opacity: 0; transform: translateY(8px); transition: all .2s; }
   .toast.show { opacity: 1; transform: translateY(0); }
@@ -242,6 +247,24 @@ function fmtTime(sec){sec=Math.max(0,sec||0);const m=Math.floor(sec/60),s=Math.f
 const p = () => state.project;
 const total = () => p()?.totalDuration || state.segments[state.segments.length-1]?.end || 0;
 
+// ── Trim/cut (source time) ──────────────────────────────────────────────────
+// state.trimIn / state.trimOut define the single kept range against the source
+// take. darwinClips on the project carries the N-clip model; trim-first uses one
+// clip. The timeline axis stays source time; trimmed parts are dimmed; preview
+// plays only [trimIn, trimOut]; the render remaps to output time on the worker.
+function initTrim() {
+  const clips = p().darwinClips || [];
+  if (clips.length) { state.trimIn = clips[0].srcStart || 0; state.trimOut = clips[clips.length - 1].srcEnd || total(); }
+  else { state.trimIn = 0; state.trimOut = total(); }
+}
+function isTrimmed() { return state.trimIn > 0.01 || state.trimOut < total() - 0.01; }
+function outputDuration() { return Math.max(0, state.trimOut - state.trimIn); }
+function saveTrim() {
+  const clips = isTrimmed() ? [{ srcStart: +state.trimIn.toFixed(2), srcEnd: +state.trimOut.toFixed(2) }] : [];
+  patch({ darwinClips: clips });
+}
+function resetTrim() { state.trimIn = 0; state.trimOut = total(); saveTrim(); renderTimeline(); paint(); }
+
 // =============================================================================
 // Load
 // =============================================================================
@@ -257,6 +280,7 @@ async function boot() {
 
   await resolveAssetUrls();
   rebuildSegments();
+  initTrim();
   renderAssets();
   renderTimeline();
   renderInspector();
@@ -390,11 +414,26 @@ function paint() {
   movePlayhead(t);
 }
 
-function loop() { if (state.playing) paint(); requestAnimationFrame(loop); }
+function loop() {
+  if (state.playing) {
+    if (darwinVid.currentTime >= state.trimOut - 0.02) {
+      stopPlayback();
+      if ($('loopChk').checked) { seek(state.trimIn); play(); }
+      else { seek(state.trimOut); }
+    } else { paint(); }
+  }
+  requestAnimationFrame(loop);
+}
 
 // transport
 function play() {
   if (!darwinVid.src) return;
+  // start inside the kept window
+  if (darwinVid.currentTime < state.trimIn - 0.01 || darwinVid.currentTime >= state.trimOut - 0.01) {
+    darwinVid.currentTime = state.trimIn;
+    if (state.musicUrl) musicAud.currentTime = state.trimIn;
+    lastStockIndex = -2;
+  }
   state.playing = true; $('playBtn').innerHTML = '&#10073;&#10073;';
   darwinVid.play().catch(()=>{});
   if (state.musicUrl) { musicAud.currentTime = darwinVid.currentTime; musicAud.play().catch(()=>{}); }
@@ -528,13 +567,23 @@ function renderTimeline() {
   const musicBlock = p().musicS3Key ? `<div class="tl-block music" style="left:${x(0)}px;width:${T*state.pxPerSec}px">${escapeHtml(p().musicName||'music')}</div>` : '';
 
   inner.style.width = (W + 20) + 'px';
+  const dimL = state.trimIn > 0.01 ? `<div class="tl-dim" style="left:${x(0)}px;width:${state.trimIn * state.pxPerSec}px"></div>` : '';
+  const dimR = state.trimOut < T - 0.01 ? `<div class="tl-dim" style="left:${x(state.trimOut)}px;width:${Math.max(0, (T - state.trimOut) * state.pxPerSec)}px"></div>` : '';
   inner.innerHTML = `
     <div class="tl-ruler" id="tlRuler">${ticks}</div>
     <div class="tl-row"><div class="tl-rowlabel">Video</div><div class="tl-lane">${vBlocks}</div></div>
     <div class="tl-row"><div class="tl-rowlabel">Narration</div><div class="tl-lane">${narrBlock}</div></div>
     <div class="tl-row"><div class="tl-rowlabel">Music</div><div class="tl-lane">${musicBlock || '<div class="insp-meta" style="padding-left:8px;align-self:center">none</div>'}</div></div>
+    ${dimL}${dimR}
+    <div class="tl-trim left" id="tlTrimL" style="left:${x(state.trimIn)}px" title="trim start"></div>
+    <div class="tl-trim right" id="tlTrimR" style="left:${x(state.trimOut)}px" title="trim end"></div>
     <div class="tl-playhead" id="tlPlayhead" style="left:${x(0)}px"></div>
     <div class="tl-playhead-grip" id="tlGrip" style="left:${x(0)}px"></div>`;
+
+  // output-duration / trim readout
+  $('tlHint').innerHTML = isTrimmed()
+    ? `output ${fmtTime(outputDuration())} (trimmed from ${fmtTime(T)}) <a href="#" onclick="resetTrim();return false" style="color:#66B0FF;margin-left:6px">reset trim</a>`
+    : 'drag the green handles to trim; click a split block to change its layout';
 
   // seek by clicking ruler
   const ruler = $('tlRuler');
@@ -547,6 +596,25 @@ function renderTimeline() {
     const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
   };
+  // drag trim handles (source-time)
+  const dragTrim = (el, which) => {
+    if (!el) return;
+    el.onmousedown = (e) => {
+      e.preventDefault(); const r = ruler.getBoundingClientRect();
+      const onMove = (ev) => {
+        let tt = ($('tlScroll').scrollLeft + ev.clientX - r.left - LBL) / state.pxPerSec;
+        tt = Math.max(0, Math.min(T, tt));
+        if (which === 'L') state.trimIn = Math.min(tt, state.trimOut - 0.5);
+        else state.trimOut = Math.max(tt, state.trimIn + 0.5);
+        renderTimeline();
+        seek(which === 'L' ? state.trimIn : Math.max(state.trimIn, state.trimOut - 0.05));
+      };
+      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); saveTrim(); };
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    };
+  };
+  dragTrim($('tlTrimL'), 'L');
+  dragTrim($('tlTrimR'), 'R');
   movePlayhead(darwinVid.src ? darwinVid.currentTime : 0);
 }
 function movePlayhead(t) {
@@ -663,8 +731,11 @@ function maybeBackfillDuration(force) {
   const tryRead = () => {
     const d = darwinVid.duration;
     if (isFinite(d) && d > 0) {
+      const wasTrimmed = isTrimmed();
       patch({ totalDuration: d });
-      rebuildSegments(); renderAssets(); renderTimeline(); paint();
+      rebuildSegments();
+      if (!wasTrimmed) { state.trimIn = 0; state.trimOut = d; } // untrimmed window follows the take
+      renderAssets(); renderTimeline(); paint();
     }
   };
   darwinVid.addEventListener('loadedmetadata', tryRead, { once: true });
@@ -694,6 +765,7 @@ $('renderBtn').onclick = async () => {
       scriptText: $('scriptText').value,
       layoutOverrides: p().layoutOverrides || {},
       defaultLayout: p().defaultLayout || 'stock-top',
+      darwinClips: p().darwinClips || [],
       totalDuration: p().totalDuration || 0,
       stockS3Keys: p().stockS3Keys || [], stockNames: p().stockNames || [],
       musicVolume: (typeof p().musicVolume === 'number') ? p().musicVolume : 0.15,

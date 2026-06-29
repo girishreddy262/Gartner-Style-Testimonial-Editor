@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Darwin Reel render script (Lambda) — parallels scripts/render.mjs.
+ * Darwin Reel render script (Lambda): parallels scripts/render.mjs.
  * Renders the DarwinReel composition (1080x1920 vertical).
  *
  * Payload (from worker, already parsed): {
@@ -37,6 +37,7 @@ const inputProps = {
   musicVolume: typeof project.musicVolume === 'number' ? project.musicVolume : 0.15,
   segments: Array.isArray(project.segments) ? project.segments : [],
   captions: Array.isArray(project.captions) ? project.captions : [],
+  darwinClips: Array.isArray(project.darwinClips) ? project.darwinClips : [],
   totalDuration,
   captionStyle: project.captionStyle || {},
 };

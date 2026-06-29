@@ -10,15 +10,23 @@ import {
 } from 'remotion';
 
 // =============================================================================
-// DarwinReel — vertical (1080x1920) reel composition.
-// Consumes a render plan from darwin-parser.js buildRenderPlan().
+// DarwinReel: vertical (1080x1920) reel composition.
+// Consumes a render plan from darwin-parser.js (buildRenderPlan + applyDarwinClips).
 //
-// ARCHITECTURE (important for audio continuity):
-//   - ONE continuous Darwin video at the base, playing 0..total. Its audio IS
-//     the narration and is never interrupted (no per-segment remount → no clicks).
-//   - Split visuals are OVERLAYS on top of that base, only where a segment needs
-//     them. In split layouts we draw a SECOND, MUTED, cropped copy of Darwin for
-//     the half it occupies — the audio always comes from the base layer only.
+// ARCHITECTURE (audio continuity + trim/cut):
+//   - The Darwin take is the audio spine. With NO cuts it is ONE continuous
+//     OffthreadVideo (no remount -> no clicks). With trim/cut, `darwinClips`
+//     describes the KEPT source ranges; the base layer plays them back-to-back
+//     in OUTPUT time. A single trim is still one continuous mount (no clicks);
+//     multi-cut introduces intentional seams exactly at the cuts.
+//   - Split visuals are OVERLAYS on top, only where a segment needs them. In a
+//     split we draw a SECOND, MUTED, cropped copy of Darwin for the half it
+//     occupies. That copy is seeked (startFrom = seg.srcStart) so it stays in
+//     sync with the base. Audio always comes from the base layer only.
+//
+// `segments`, `captions`, `darwinClips` are all in OUTPUT time (post-cut),
+// produced by applyDarwinClips on the worker. Each split segment carries
+// `srcStart` = the source second at its output start.
 // =============================================================================
 
 const W = 1080;
@@ -26,8 +34,9 @@ const H = 1920;
 const HALF = H / 2; // 960
 
 type Layout = 'stock-top' | 'darwin-top' | 'full-darwin' | 'full-stock';
-type Segment = { start: number; end: number; layout: Layout; stockIndex: number | null };
+type Segment = { start: number; end: number; layout: Layout; stockIndex: number | null; srcStart?: number };
 type Caption = { text: string; start: number; end: number };
+type Clip = { srcStart: number; srcEnd: number; outStart: number; outEnd: number };
 
 export const DarwinReel: React.FC<{
   darwinUrl?: string | null;
@@ -36,6 +45,7 @@ export const DarwinReel: React.FC<{
   musicVolume?: number;
   segments?: Segment[];
   captions?: Caption[];
+  darwinClips?: Clip[];
   totalDuration?: number;
   captionStyle?: Partial<CaptionStyle>;
 }> = ({
@@ -45,16 +55,29 @@ export const DarwinReel: React.FC<{
   musicVolume = 0.15,
   segments = [],
   captions = [],
+  darwinClips = [],
+  totalDuration = 0,
   captionStyle = {},
 }) => {
   const { fps } = useVideoConfig();
 
-  const darwinFull = (muted: boolean) =>
+  // Output duration: prefer explicit totalDuration, else last segment end.
+  const outTotal = totalDuration || (segments.length ? segments[segments.length - 1].end : 0);
+
+  // Base Darwin layer pieces, in OUTPUT time. Fallback = whole take as one clip.
+  const clips: Clip[] =
+    darwinClips && darwinClips.length
+      ? darwinClips
+      : [{ srcStart: 0, srcEnd: outTotal, outStart: 0, outEnd: outTotal }];
+
+  const darwinPiece = (c: Clip, muted: boolean, objectPosition = 'center top') =>
     darwinUrl ? (
       <OffthreadVideo
         src={darwinUrl}
         muted={muted}
-        style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center top' }}
+        startFrom={Math.round(c.srcStart * fps)}
+        endAt={Math.max(Math.round(c.srcStart * fps) + 1, Math.round(c.srcEnd * fps))}
+        style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition }}
       />
     ) : (
       <PlaceholderBox label="Darwin video" />
@@ -62,8 +85,17 @@ export const DarwinReel: React.FC<{
 
   return (
     <AbsoluteFill style={{ backgroundColor: '#000' }}>
-      {/* BASE: continuous Darwin (audio spine, never interrupted) */}
-      <AbsoluteFill>{darwinFull(false)}</AbsoluteFill>
+      {/* BASE: continuous Darwin spine, played as one-or-more kept clips */}
+      {clips.map((c, i) => (
+        <Sequence
+          key={`base-${i}`}
+          from={Math.round(c.outStart * fps)}
+          durationInFrames={Math.max(1, Math.round((c.outEnd - c.outStart) * fps))}
+          layout="none"
+        >
+          <AbsoluteFill>{darwinPiece(c, false)}</AbsoluteFill>
+        </Sequence>
+      ))}
 
       {/* OVERLAYS: one per segment that changes the visual */}
       {segments.map((seg, i) => {
@@ -71,9 +103,22 @@ export const DarwinReel: React.FC<{
         const fromF = Math.round(seg.start * fps);
         const durF = Math.max(1, Math.round((seg.end - seg.start) * fps));
         const stockUrl = seg.stockIndex != null ? stockUrls[seg.stockIndex] : null;
+        // Muted Darwin copy for the split half, seeked to the source frame so it
+        // tracks the base. Its own clip spans this segment's source range.
+        const sStart = seg.srcStart != null ? seg.srcStart : seg.start;
+        const segClip: Clip = {
+          srcStart: sStart,
+          srcEnd: sStart + (seg.end - seg.start),
+          outStart: seg.start,
+          outEnd: seg.end,
+        };
         return (
           <Sequence key={`ov-${i}`} from={fromF} durationInFrames={durF} layout="none">
-            <SegmentOverlay layout={seg.layout} stockUrl={stockUrl} darwinMutedCopy={darwinFull(true)} />
+            <SegmentOverlay
+              layout={seg.layout}
+              stockUrl={stockUrl}
+              darwinMutedCopy={darwinPiece(segClip, true)}
+            />
           </Sequence>
         );
       })}

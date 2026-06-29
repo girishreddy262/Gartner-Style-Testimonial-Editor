@@ -1,5 +1,5 @@
 // =============================================================================
-// Darwin Reel — script parser
+// Darwin Reel: script parser
 // =============================================================================
 // Input: plain text extracted from the script DOCX (one logical line per line).
 // Output: a structured timeline the editor + renderer consume.
@@ -40,7 +40,7 @@ function parseDarwinScript(rawText, opts = {}) {
 
   // The script body begins at the FIRST line containing a [MM:SS] timestamp.
   // Anything above it (title, instructions, format notes) is preamble and is
-  // ignored — prevents help text mentioning "/split" or "[MM:SS]" from being
+  // ignored, prevents help text mentioning "/split" or "[MM:SS]" from being
   // mis-parsed as real directives/captions.
   const firstTsLine = lines.findIndex(l => TS_RE.test(l));
   if (firstTsLine > 0) lines = lines.slice(firstTsLine);
@@ -118,7 +118,7 @@ function parseDarwinScript(rawText, opts = {}) {
 
 function buildWarnings(splitBlocks, sawAnyTimestamp) {
   const w = [];
-  if (!sawAnyTimestamp) w.push('No [MM:SS] timestamps found — the whole video will play as full-frame Darwin with no splits.');
+  if (!sawAnyTimestamp) w.push('No [MM:SS] timestamps found; the whole video will play as full-frame Darwin with no splits.');
   for (const b of splitBlocks) {
     if (b.end <= b.start) w.push(`A /split block at ${b.start}s has no valid end after it.`);
   }
@@ -153,6 +153,68 @@ function buildRenderPlan(parsed, opts = {}) {
   return segs;
 }
 
+// =============================================================================
+// Darwin trim/cut: source <-> output time.
+// darwinClips = ordered KEPT source ranges of the original take, in seconds:
+//   [{ srcStart, srcEnd }, ...]
+// Trim   = one clip [{in, out}].
+// Cut    = N clips with removed chunks as the gaps between them.
+// Absent / single full range = identity (today's behavior, fully back-compatible).
+// =============================================================================
+
+// Sanitize + sort clips and stamp each with its output offset (outStart/outEnd).
+function resolveDarwinClips(darwinClips, sourceTotal) {
+  const T = sourceTotal > 0 ? sourceTotal : 0;
+  let clips = Array.isArray(darwinClips) ? darwinClips : null;
+  if (!clips || clips.length === 0) clips = [{ srcStart: 0, srcEnd: T }];
+  clips = clips
+    .map(c => ({ srcStart: Math.max(0, +c.srcStart || 0), srcEnd: T ? Math.min(T, +c.srcEnd || 0) : (+c.srcEnd || 0) }))
+    .filter(c => c.srcEnd > c.srcStart)
+    .sort((a, b) => a.srcStart - b.srcStart);
+  if (clips.length === 0) clips = [{ srcStart: 0, srcEnd: T }];
+  let cursor = 0;
+  return clips.map(c => {
+    const len = c.srcEnd - c.srcStart;
+    const r = { srcStart: c.srcStart, srcEnd: c.srcEnd, outStart: cursor, outEnd: cursor + len };
+    cursor += len;
+    return r;
+  });
+}
+
+// Remap a source-time plan ({segments, captions} over 0..sourceTotal) into output
+// time defined by the clips. Output is contiguous 0..outputDuration. Each output
+// segment carries srcStart (the source second at its start) so the renderer can
+// seek the muted Darwin copy in a split to the correct frame.
+function applyDarwinClips(plan, darwinClips, sourceTotal) {
+  const clips = resolveDarwinClips(darwinClips, sourceTotal);
+  const outputDuration = clips.reduce((a, c) => a + (c.srcEnd - c.srcStart), 0);
+  const EPS = 1e-6;
+
+  const segments = [];
+  for (const seg of (plan.segments || [])) {
+    for (const c of clips) {
+      const a = Math.max(seg.start, c.srcStart);
+      const b = Math.min(seg.end, c.srcEnd);
+      if (b - a <= EPS) continue;
+      segments.push({ start: c.outStart + (a - c.srcStart), end: c.outStart + (b - c.srcStart), layout: seg.layout, stockIndex: seg.stockIndex, srcStart: a });
+    }
+  }
+  segments.sort((x, y) => x.start - y.start);
+
+  const captions = [];
+  for (const cap of (plan.captions || [])) {
+    for (const c of clips) {
+      const a = Math.max(cap.start, c.srcStart);
+      const b = Math.min(cap.end, c.srcEnd);
+      if (b - a <= EPS) continue;
+      captions.push({ text: cap.text, start: c.outStart + (a - c.srcStart), end: c.outStart + (b - c.srcStart) });
+    }
+  }
+  captions.sort((x, y) => x.start - y.start);
+
+  return { segments, captions, darwinClips: clips, outputDuration };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseDarwinScript, buildRenderPlan };
+  module.exports = { parseDarwinScript, buildRenderPlan, resolveDarwinClips, applyDarwinClips };
 }
