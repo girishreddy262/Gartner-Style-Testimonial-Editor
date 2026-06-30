@@ -774,6 +774,12 @@ function renderClipInspector(insp, key) {
       <div class="insp-h">Trim (stock source)</div>
       <button class="btn sm" id="txTrimBtn" style="width:100%">Trim clip with preview</button>
       <div class="insp-meta" id="txTrimMeta" style="margin-top:6px">${(t.trimIn || t.trimOut) ? `in ${fmtTime(t.trimIn)}${t.trimOut ? ' \u2013 out ' + fmtTime(t.trimOut) : ''}` : 'full clip'}</div>` : '';
+  const isDarwin = !isStock;
+  const darwinRow = isDarwin ? `
+      <div class="insp-h">Trim &amp; cut (Darwin)</div>
+      <button class="btn sm" id="dwTrimBtn" style="width:100%">Trim Darwin start / end</button>
+      ${state.selectedDarwin ? `<button class="btn sm" id="dwDelBtn" style="width:100%;margin-top:8px">Delete this section</button>` : ''}
+      <div class="insp-meta" style="margin-top:6px">Park the playhead and press Cut on the timeline to split the Darwin, then delete the part you do not want.</div>` : '';
   const capInfo = (idx != null) ? splitCaptionLine(idx) : null;
   const capEditor = (idx != null) ? `
       <div class="insp-h">Caption</div>
@@ -782,7 +788,7 @@ function renderClipInspector(insp, key) {
   insp.innerHTML = `
     <div class="insp-sec">
       <div class="insp-h">${label}</div>
-      <div class="insp-meta">${seg ? `${fmtTime(seg.start)} \u2013 ${fmtTime(seg.end)}` : 'whole reel'} \u00b7 drag in preview to pan</div>
+      <div class="insp-meta">${seg ? `${fmtTime(seg.start)} \u2013 ${fmtTime(seg.end)}` : (isDarwin && state.selectedDarwin ? `${fmtTime(state.selectedDarwin.start)} \u2013 ${fmtTime(state.selectedDarwin.end)}` : 'whole reel')} \u00b7 drag in preview to pan</div>
       ${layoutGrid}
       <div class="insp-h">Frame</div>
       <div class="layout-grid" style="grid-template-columns:1fr 1fr;margin-bottom:10px">
@@ -793,6 +799,7 @@ function renderClipInspector(insp, key) {
       <div class="field"><label>Position X <span class="val" id="txXVal">${t.x}%</span></label><input type="range" id="txX" min="-50" max="50" value="${t.x}"></div>
       <div class="field"><label>Position Y <span class="val" id="txYVal">${t.y}%</span></label><input type="range" id="txY" min="-50" max="50" value="${t.y}"></div>
       ${trimRow}
+      ${darwinRow}
       ${capEditor}
       <button class="reset-link" onclick="resetClipTx('${key}')" style="margin-top:10px">reset framing</button>
       <div class="insp-meta" style="margin-top:8px"><a href="#" onclick="clearSelection();return false" style="color:#66B0FF">done</a></div>
@@ -802,6 +809,8 @@ function renderClipInspector(insp, key) {
   bind('txX', e => { setClipTx(key, { x: +e.target.value }); $('txXVal').textContent = e.target.value + '%'; applyTransforms(); });
   bind('txY', e => { setClipTx(key, { y: +e.target.value }); $('txYVal').textContent = e.target.value + '%'; applyTransforms(); });
   const tb = $('txTrimBtn'); if (tb) tb.onclick = () => openTrimPopup(idx);
+  const dtb = $('dwTrimBtn'); if (dtb) dtb.onclick = openDarwinTrim;
+  const ddb = $('dwDelBtn'); if (ddb) ddb.onclick = deleteSelected;
   const ce = $('txCap'); if (ce) ce.oninput = () => setSplitCaption(idx, ce.value);
 }
 
@@ -1239,8 +1248,8 @@ function deleteSelected() {
   } else { toast('Select a clip or a Darwin block first, then delete', 'error'); }
 }
 function selectDarwinSeg(start, end) {
-  state.selectedDarwin = { start, end }; state.selectedSplit = null; state.selectedClip = null; state.selectedCaption = null;
-  renderInspector(); renderAssets(); renderTimeline(); seek(start);
+  state.selectedDarwin = { start, end }; state.selectedClip = 'dfull'; state.selectedSplit = null; state.selectedCaption = null;
+  renderInspector(); renderAssets(); renderTimeline(); seek(start); applyTransforms();
 }
 
 // ── Caption track ─────────────────────────────────────────────────────────────
