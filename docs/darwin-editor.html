@@ -241,6 +241,8 @@
       <span class="lbl">Timeline</span>
       <button class="btn ghost sm" id="zoomOut">&#8722;</button>
       <button class="btn ghost sm" id="zoomIn">+</button>
+      <button class="btn ghost sm" id="undoBtn" title="Undo (Cmd+Z)" disabled>&#8634; Undo</button>
+      <button class="btn ghost sm" id="redoBtn" title="Redo (Cmd+Shift+Z)" disabled>&#8635; Redo</button>
       <span class="seg-read" id="tlHint">click a split block to change its layout</span>
     </div>
     <div class="tl-scroll" id="tlScroll">
@@ -353,6 +355,7 @@ async function boot() {
   maybeBackfillDuration();
   paint(); // draw frame 0 (sets edge visibility, time readout, playhead) before first play
   if (p().status === 'rendering') startPolling();
+  undoReady = true; // start recording undo history only after the project is loaded
 }
 
 async function resolveAssetUrls() {
@@ -1052,11 +1055,79 @@ function movePlayhead(t) {
 }
 $('zoomIn').onclick = () => { state.pxPerSec = Math.min(240, state.pxPerSec * 1.4); renderTimeline(); };
 $('zoomOut').onclick = () => { state.pxPerSec = Math.max(12, state.pxPerSec / 1.4); renderTimeline(); };
+$('undoBtn').onclick = () => doUndo();
+$('redoBtn').onclick = () => doRedo();
+document.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey)) return;
+  const k = e.key.toLowerCase();
+  if (k !== 'z' && k !== 'y') return;
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return; // let native text undo
+  e.preventDefault();
+  if (k === 'y' || (k === 'z' && e.shiftKey)) doRedo(); else doUndo();
+});
 
 // =============================================================================
 // Edits: script, stock, darwin, music  (+ autosave)
 // =============================================================================
-function patch(fields) { state.project = { ...state.project, ...fields }; scheduleSave(fields); }
+// ── Undo / redo ──────────────────────────────────────────────────────────────
+// Every state change goes through patch(). We snapshot the project before a
+// burst of changes and finalize after 600ms idle, so a drag is one undo step.
+let undoStack = [], redoStack = [], pendingUndo = null, undoTimer = null, undoReady = false;
+const MAX_UNDO = 60;
+const snapProject = () => JSON.stringify(state.project);
+function finalizePending() {
+  clearTimeout(undoTimer);
+  if (pendingUndo !== null && pendingUndo !== snapProject()) {
+    undoStack.push(pendingUndo);
+    if (undoStack.length > MAX_UNDO) undoStack.shift();
+    redoStack = [];
+    updateUndoButtons();
+  }
+  pendingUndo = null;
+}
+function patch(fields) {
+  if (undoReady) {
+    if (pendingUndo === null) pendingUndo = snapProject();
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(finalizePending, 600);
+  }
+  state.project = { ...state.project, ...fields };
+  scheduleSave(fields);
+}
+async function applyProjectToUI() {
+  $('reelName').textContent = p().title || 'Untitled reel';
+  $('scriptText').value = p().scriptText || '';
+  await resolveAssetUrls();
+  rebuildSegments();
+  renderAssets();
+  renderTimeline();
+  renderInspector();
+  lastStockIndex = -2;
+  paint();
+}
+async function doUndo() {
+  finalizePending();
+  if (!undoStack.length) { toast('Nothing to undo'); return; }
+  redoStack.push(snapProject());
+  state.project = JSON.parse(undoStack.pop());
+  await applyProjectToUI();
+  DarwinAPI.update(PROJECT_ID, state.project).catch(() => {});
+  updateUndoButtons();
+}
+async function doRedo() {
+  if (!redoStack.length) { toast('Nothing to redo'); return; }
+  undoStack.push(snapProject());
+  state.project = JSON.parse(redoStack.pop());
+  await applyProjectToUI();
+  DarwinAPI.update(PROJECT_ID, state.project).catch(() => {});
+  updateUndoButtons();
+}
+function updateUndoButtons() {
+  const u = $('undoBtn'), r = $('redoBtn');
+  if (u) u.disabled = undoStack.length === 0 && pendingUndo === null;
+  if (r) r.disabled = redoStack.length === 0;
+}
 function scheduleSave(fields) {
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(async () => {
