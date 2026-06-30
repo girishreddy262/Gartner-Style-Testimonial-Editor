@@ -68,7 +68,7 @@ export const DarwinReel: React.FC<{
 
   const txStyle = (key: string): React.CSSProperties => {
     const t = clipTransforms[key] || {};
-    const s = t.scale != null ? t.scale : 1, x = t.x || 0, y = t.y || 0;
+    const s = Math.max(1, t.scale != null ? t.scale : 1), x = t.x || 0, y = t.y || 0;
     return { transform: `translate(${x}%, ${y}%) scale(${s})`, transformOrigin: 'center center' };
   };
 
@@ -84,7 +84,7 @@ export const DarwinReel: React.FC<{
         muted={muted}
         startFrom={Math.round(c.srcStart * fps)}
         endAt={Math.max(Math.round(c.srcStart * fps) + 1, Math.round(c.srcEnd * fps))}
-        style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition, ...txStyle(txKey) }}
+        style={{ width: '100%', height: '100%', objectFit: ((clipTransforms[txKey] || {}).fit === 'contain' ? 'contain' : 'cover'), objectPosition, ...txStyle(txKey) }}
       />
     ) : (
       <PlaceholderBox label="Darwin video" />
@@ -122,6 +122,7 @@ export const DarwinReel: React.FC<{
               stockTrim={{ trimIn: st.trimIn || 0, trimOut: st.trimOut || 0 }}
               slotDuration={seg.end - seg.start}
               stockStyle={txStyle(stockKey)}
+              stockFit={st.fit === 'contain' ? 'contain' : 'cover'}
               darwinMutedCopy={darwinPiece(segClip, true, `dhalf-${seg.stockIndex}`)}
             />
           </Sequence>
@@ -152,8 +153,9 @@ const SegmentOverlay: React.FC<{
   stockTrim: { trimIn: number; trimOut: number };
   slotDuration: number;
   stockStyle: React.CSSProperties;
+  stockFit?: 'cover' | 'contain';
   darwinMutedCopy: React.ReactNode;
-}> = ({ layout, stockUrl, stockTrim, slotDuration, stockStyle, darwinMutedCopy }) => {
+}> = ({ layout, stockUrl, stockTrim, slotDuration, stockStyle, stockFit = 'cover', darwinMutedCopy }) => {
   const { fps } = useVideoConfig();
   const tin = stockTrim?.trimIn || 0;
   const tout = stockTrim?.trimOut || 0;
@@ -164,7 +166,7 @@ const SegmentOverlay: React.FC<{
       muted
       startFrom={Math.round(tin * fps)}
       endAt={Math.max(Math.round(tin * fps) + 1, Math.round(endSec * fps))}
-      style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center', ...stockStyle }}
+      style={{ width: '100%', height: '100%', objectFit: stockFit, objectPosition: 'center', ...stockStyle }}
     />
   ) : (
     <PlaceholderBox label="Stock clip" />
@@ -207,12 +209,18 @@ const CaptionView: React.FC<{ text: string; style: Partial<CaptionStyle> }> = ({
   const s = { ...DEFAULT_CAPTION, ...style };
   const frame = useCurrentFrame();
   const opacity = interpolate(frame, [0, 6], [0, 1], { extrapolateRight: 'clamp' });
+  const pos = (style as { position?: string }).position || 'bottom';
+  const fillStyle: React.CSSProperties =
+    pos === 'top' ? { justifyContent: 'flex-start', paddingTop: 180 }
+    : pos === 'center' ? { justifyContent: 'center' }
+    : { justifyContent: 'flex-end', paddingBottom: s.bottom };
   return (
-    <AbsoluteFill style={{ justifyContent: 'flex-end', alignItems: 'center', paddingBottom: s.bottom }}>
+    <AbsoluteFill style={{ alignItems: 'center', ...fillStyle }}>
       <div style={{
         opacity, maxWidth: s.maxWidth, margin: '0 60px', padding: '18px 30px',
         background: s.bg, borderRadius: 18, color: s.color, fontFamily: s.fontFamily,
         fontSize: s.fontSize, fontWeight: s.fontWeight, lineHeight: 1.25, textAlign: 'center',
+        display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden',
       }}>
         {text}
       </div>

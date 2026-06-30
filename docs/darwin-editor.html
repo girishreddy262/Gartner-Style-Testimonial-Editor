@@ -408,7 +408,8 @@ function activeSegment(t) {
 // x/y are percent offsets; scale is a multiplier on an object-fit:cover element.
 function clipTx(key) {
   const t = (p().clipTransforms || {})[key] || {};
-  return { scale: t.scale != null ? t.scale : 1, x: t.x || 0, y: t.y || 0, trimIn: t.trimIn || 0, trimOut: t.trimOut || 0 };
+  // scale clamped >= 1 (zoom in only). To show the WHOLE frame uncut, use fit:'contain'.
+  return { scale: Math.max(1, t.scale != null ? t.scale : 1), x: t.x || 0, y: t.y || 0, trimIn: t.trimIn || 0, trimOut: t.trimOut || 0, fit: t.fit === 'contain' ? 'contain' : 'cover' };
 }
 function setClipTx(key, fields) {
   const m = { ...(p().clipTransforms || {}) };
@@ -441,6 +442,8 @@ function applyLayout(seg, t) {
   const dv = darwinVid, sv = stockVid;
   const hasDarwin = !!state.darwinUrl;
   const stockUrl = seg.stockIndex != null ? state.stockUrls[seg.stockIndex] : null;
+  const dKey = darwinKey(seg), sKey = seg.stockIndex != null ? `stock-${seg.stockIndex}` : null;
+  const dFit = clipTx(dKey).fit, sFit = sKey ? clipTx(sKey).fit : 'cover';
   $('edge').style.display = (seg.layout === 'stock-top' || seg.layout === 'darwin-top') ? 'block' : 'none';
   showPh(seg, hasDarwin, stockUrl);
 
@@ -465,17 +468,17 @@ function applyLayout(seg, t) {
   };
 
   if (seg.layout === 'full-darwin') {
-    setSlot(dSlot, dv, FULL, 'cover', '50% 0%', 1, true);
-    setSlot(sSlot, sv, FULL, 'cover', '50% 50%', 0, false);
+    setSlot(dSlot, dv, FULL, dFit, '50% 0%', 1, true);
+    setSlot(sSlot, sv, FULL, sFit, '50% 50%', 0, false);
   } else if (seg.layout === 'full-stock') {
-    setSlot(dSlot, dv, FULL, 'cover', '50% 0%', 1, true);   // stays for audio, covered
-    setSlot(sSlot, sv, FULL, 'cover', '50% 50%', 2, true);
+    setSlot(dSlot, dv, FULL, dFit, '50% 0%', 1, true);   // stays for audio, covered
+    setSlot(sSlot, sv, FULL, sFit, '50% 50%', 2, true);
   } else if (seg.layout === 'stock-top') {
-    setSlot(sSlot, sv, TOP, 'cover', '50% 50%', 2, true);
-    setSlot(dSlot, dv, BOT, 'cover', '50% 0%', 2, true);
+    setSlot(sSlot, sv, TOP, sFit, '50% 50%', 2, true);
+    setSlot(dSlot, dv, BOT, dFit, '50% 0%', 2, true);
   } else if (seg.layout === 'darwin-top') {
-    setSlot(dSlot, dv, TOP, 'cover', '50% 0%', 2, true);
-    setSlot(sSlot, sv, BOT, 'cover', '50% 50%', 2, true);
+    setSlot(dSlot, dv, TOP, dFit, '50% 0%', 2, true);
+    setSlot(sSlot, sv, BOT, sFit, '50% 50%', 2, true);
   }
 }
 
@@ -681,16 +684,26 @@ function renderClipInspector(insp, key) {
       <div class="insp-h">Trim (stock source)</div>
       <button class="btn sm" id="txTrimBtn" style="width:100%">Trim clip with preview</button>
       <div class="insp-meta" id="txTrimMeta" style="margin-top:6px">${(t.trimIn || t.trimOut) ? `in ${fmtTime(t.trimIn)}${t.trimOut ? ' \u2013 out ' + fmtTime(t.trimOut) : ''}` : 'full clip'}</div>` : '';
+  const capInfo = (idx != null) ? splitCaptionLine(idx) : null;
+  const capEditor = (idx != null) ? `
+      <div class="insp-h">Caption</div>
+      <textarea id="txCap" class="script" style="height:52px" spellcheck="false" placeholder="on-screen caption for this split">${escapeHtml(capInfo ? capInfo.text : '')}</textarea>
+      <div class="insp-meta">Shown on screen, clamped to 2 lines. Keep it short so it is not cut.</div>` : '';
   insp.innerHTML = `
     <div class="insp-sec">
       <div class="insp-h">${label}</div>
       <div class="insp-meta">${seg ? `${fmtTime(seg.start)} \u2013 ${fmtTime(seg.end)}` : 'whole reel'} \u00b7 drag in preview to pan</div>
       ${layoutGrid}
       <div class="insp-h">Frame</div>
-      <div class="field"><label>Scale <span class="val" id="txScaleVal">${Math.round(t.scale * 100)}%</span></label><input type="range" id="txScale" min="50" max="400" value="${Math.round(t.scale * 100)}"></div>
+      <div class="layout-grid" style="grid-template-columns:1fr 1fr;margin-bottom:10px">
+        <div class="layout-opt ${t.fit !== 'contain' ? 'active' : ''}" onclick="setClipFit('${key}','cover')"><div class="layout-name">Fill (crop to edges)</div></div>
+        <div class="layout-opt ${t.fit === 'contain' ? 'active' : ''}" onclick="setClipFit('${key}','contain')"><div class="layout-name">Fit (whole, uncut)</div></div>
+      </div>
+      <div class="field"><label>Scale <span class="val" id="txScaleVal">${Math.round(t.scale * 100)}%</span></label><input type="range" id="txScale" min="100" max="400" value="${Math.round(t.scale * 100)}"></div>
       <div class="field"><label>Position X <span class="val" id="txXVal">${t.x}%</span></label><input type="range" id="txX" min="-50" max="50" value="${t.x}"></div>
       <div class="field"><label>Position Y <span class="val" id="txYVal">${t.y}%</span></label><input type="range" id="txY" min="-50" max="50" value="${t.y}"></div>
       ${trimRow}
+      ${capEditor}
       <button class="reset-link" onclick="resetClipTx('${key}')" style="margin-top:10px">reset framing</button>
       <div class="insp-meta" style="margin-top:8px"><a href="#" onclick="clearSelection();return false" style="color:#66B0FF">done</a></div>
     </div>`;
@@ -699,6 +712,7 @@ function renderClipInspector(insp, key) {
   bind('txX', e => { setClipTx(key, { x: +e.target.value }); $('txXVal').textContent = e.target.value + '%'; applyTransforms(); });
   bind('txY', e => { setClipTx(key, { y: +e.target.value }); $('txYVal').textContent = e.target.value + '%'; applyTransforms(); });
   const tb = $('txTrimBtn'); if (tb) tb.onclick = () => openTrimPopup(idx);
+  const ce = $('txCap'); if (ce) ce.oninput = () => setSplitCaption(idx, ce.value);
 }
 
 // =============================================================================
@@ -792,6 +806,8 @@ function wireTrimPopup() {
   $('trimModal').onclick = (e) => { if (e.target === $('trimModal')) closeTrimPopup(); };
 }
 
+function setClipFit(key, fit) { setClipTx(key, { fit }); paint(); renderInspector(); }
+
 function selectClipFromSlot(which) {
   const seg = activeSegment(darwinVid.src ? darwinVid.currentTime : 0);
   const key = which === 'd' ? darwinKey(seg) : stockKey(seg);
@@ -880,6 +896,44 @@ function setLayout(idx, layout) {
 // =============================================================================
 // Timeline
 // =============================================================================
+// locate / edit the on-screen caption text for split idx (its line in the script)
+function splitCaptionLine(idx) {
+  const lines = (p().scriptText || '').split(/\r?\n/);
+  let n = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/\/split\s+start/i.test(lines[i])) {
+      n++;
+      if (n === idx) {
+        const inline = lines[i].replace(/^\s*\[\d+:\d+\]\s*/, '').replace(/\/split\s+start/i, '').trim();
+        if (inline) return { lineIdx: i, text: inline, inline: true };
+        for (let j = i + 1; j < lines.length; j++) {
+          const ln = lines[j].trim();
+          if (!ln) continue;
+          if (/^\[\d+:\d+\]/.test(ln) || /\/split/i.test(ln)) return null;
+          return { lineIdx: j, text: lines[j].trim(), inline: false };
+        }
+        return null;
+      }
+    }
+  }
+  return null;
+}
+function setSplitCaption(idx, text) {
+  const info = splitCaptionLine(idx);
+  if (!info) return;
+  const lines = (p().scriptText || '').split(/\r?\n/);
+  const clean = text.replace(/\s*[\u2013\u2014]\s*/g, ', ').replace(/[\r\n]+/g, ' ').trim();
+  if (info.inline) {
+    const m = lines[info.lineIdx].match(/^\s*(\[\d+:\d+\]\s*)?(\/split\s+start)/i);
+    lines[info.lineIdx] = (m ? (m[1] || '') + m[2] : '/split start') + ' ' + clean;
+  } else {
+    lines[info.lineIdx] = clean;
+  }
+  patch({ scriptText: lines.join('\n') });
+  const sb = $('scriptText'); if (sb) sb.value = lines.join('\n');
+  rebuildSegments(); renderTimeline(); paint();
+}
+
 // timestamp markers in the script, used by timeline edge-drag to retime splits
 function getMarkers() {
   const lines = (p().scriptText || '').split(/\r?\n/);
