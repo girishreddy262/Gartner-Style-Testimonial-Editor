@@ -256,6 +256,66 @@ function docRowsToScript(rows, totalDuration) {
   return { script: out.join('\n'), footageHints, splitCount: footageHints.length };
 }
 
+// =============================================================================
+// Align the script's [MM:SS] cues to real word timestamps from a transcript.
+// words: [{ text, start }] (start in seconds, in spoken order). For each cue
+// (a timestamped line) we find where its caption's first words appear in the
+// transcript and set the cue time to that word's start. The narration is the
+// text fed to the avatar, so the transcript matches closely; we still match by
+// text near the expected position and keep times strictly increasing.
+// =============================================================================
+function alignNorm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function alignScriptToWords(scriptText, words) {
+  const lines = (scriptText || '').split(/\r?\n/);
+  const cues = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^\s*\[(\d+):(\d+)\]/);
+    if (!m) continue;
+    let cap = lines[i].replace(/^\s*\[\d+:\d+\]\s*/, '').replace(/\/split\s+\w+/ig, '').trim();
+    if (!cap) {
+      for (let j = i + 1; j < lines.length; j++) {
+        const t = lines[j].trim();
+        if (!t) continue;
+        if (/^\[\d+:\d+\]/.test(t)) break;
+        cap = t; break;
+      }
+    }
+    const anchor = cap.split(/\s+/).map(alignNorm).filter(Boolean).slice(0, 5);
+    cues.push({ lineIdx: i, anchor, origT: (+m[1]) * 60 + (+m[2]) });
+  }
+  const tw = (words || []).map(w => ({ n: alignNorm(w.text), s: w.start }));
+  const times = [];
+  let ti = 0;
+  for (let c = 0; c < cues.length; c++) {
+    const a = cues[c].anchor;
+    let best = -1;
+    if (a.length) {
+      for (let k = ti; k < tw.length; k++) {
+        if (tw[k].n === a[0]) {
+          let matched = 1;
+          for (let x = 1; x < a.length && k + x < tw.length; x++) if (tw[k + x].n === a[x]) matched++;
+          if (matched >= Math.min(2, a.length)) { best = k; break; }
+          if (best < 0) best = k; // weak fallback: first-word-only match
+        }
+      }
+    }
+    if (best >= 0) { times.push(tw[best].s); ti = best + Math.max(1, a.length); }
+    else times.push(null);
+  }
+  let last = -0.1;
+  for (let c = 0; c < cues.length; c++) {
+    let t = times[c] != null ? times[c] : cues[c].origT;
+    if (t < last + 0.1) t = last + 0.1;
+    times[c] = t; last = t;
+  }
+  for (let c = 0; c < cues.length; c++) {
+    const t = times[c], mm = Math.floor(t / 60), ss = Math.round(t % 60);
+    const ts = `[${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}]`;
+    lines[cues[c].lineIdx] = lines[cues[c].lineIdx].replace(/^\s*\[\d+:\d+\]/, ts);
+  }
+  return lines.join('\n');
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseDarwinScript, buildRenderPlan, resolveDarwinClips, applyDarwinClips, docRowsToScript };
+  module.exports = { parseDarwinScript, buildRenderPlan, resolveDarwinClips, applyDarwinClips, docRowsToScript, alignScriptToWords };
 }

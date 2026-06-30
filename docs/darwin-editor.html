@@ -207,6 +207,7 @@
       <div class="rail-sec">
         <div class="rail-title">Script <span style="color:#6b7280">from doc, or edit below</span></div>
         <div style="margin:0 14px 8px"><button class="btn sm" id="importDocx" style="width:100%">Import .docx (footage column = split)</button></div>
+        <div style="margin:0 14px 8px"><button class="btn sm" id="alignBtn" style="width:100%">Align splits to audio (accurate timing)</button></div>
         <input type="file" id="fDocxEditor" accept=".docx" class="hidden" />
         <textarea class="script" id="scriptText" spellcheck="false"></textarea>
       </div>
@@ -351,6 +352,7 @@ async function boot() {
   wireDocImport();
   wireTrimPopup();
   wireCaptionDrag();
+  { const ab = $('alignBtn'); if (ab) ab.onclick = alignToAudio; }
   // Backfill duration if missing, once the darwin video reports metadata.
   maybeBackfillDuration();
   paint(); // draw frame 0 (sets edge visibility, time readout, playhead) before first play
@@ -905,6 +907,32 @@ function wireCaptionDrag() {
     const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
   });
+}
+
+async function alignToAudio() {
+  if (!state.darwinUrl) { toast('Add a Darwin video first', 'error'); return; }
+  const btn = $('alignBtn'); if (btn) { btn.disabled = true; btn.textContent = 'Transcribing narration\u2026'; }
+  try {
+    const start = await fetch(DarwinAPI.API_BASE + '/api/darwin/' + PROJECT_ID + '/align', { method: 'POST' }).then(r => r.json());
+    if (start.error) { toast('Align: ' + start.error, 'error'); return; }
+    const tid = start.transcriptId;
+    let words = null;
+    for (let i = 0; i < 50; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      const st = await fetch(DarwinAPI.API_BASE + '/api/darwin/' + PROJECT_ID + '/align-status?tid=' + encodeURIComponent(tid)).then(r => r.json());
+      if (st.status === 'completed') { words = st.words || []; break; }
+      if (st.status === 'error') { toast('Transcription error: ' + (st.error || ''), 'error'); return; }
+      if (btn) btn.textContent = 'Transcribing\u2026 (' + (st.status || 'queued') + ')';
+    }
+    if (!words) { toast('Transcription timed out, try again', 'error'); return; }
+    if (!words.length) { toast('No words detected in the audio', 'error'); return; }
+    const newScript = alignScriptToWords(p().scriptText || '', words);
+    $('scriptText').value = newScript;
+    patch({ scriptText: newScript });
+    rebuildSegments(); renderTimeline(); renderAssets(); renderInspector(); paint();
+    toast('Splits aligned to audio (' + words.length + ' words)', 'success');
+  } catch (e) { toast('Align failed: ' + e.message, 'error'); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = 'Align splits to audio (accurate timing)'; } }
 }
 
 function setLayout(idx, layout) {
