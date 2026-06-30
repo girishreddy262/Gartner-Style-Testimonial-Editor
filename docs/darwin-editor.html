@@ -179,6 +179,7 @@
           <div class="sub" id="darwinSub"></div>
           <div class="asset-actions">
             <button class="btn sm" id="swapDarwin">Swap video</button>
+            <button class="btn sm" id="trimDarwinBtn">Cut / trim</button>
           </div>
         </div>
         <input type="file" id="fDarwin" accept="video/*" class="hidden" />
@@ -308,7 +309,25 @@ function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;',
 function fmtTime(sec){sec=Math.max(0,sec||0);const m=Math.floor(sec/60),s=Math.floor(sec%60);return `${m}:${String(s).padStart(2,'0')}`;}
 
 const p = () => state.project;
-const total = () => p()?.totalDuration || state.segments[state.segments.length-1]?.end || 0;
+const total = () => state.outputDuration || p()?.totalDuration || state.segments[state.segments.length-1]?.end || 0;
+
+// ── Output<->source time mapping for Darwin cut/trim ──────────────────────────
+// The script + segments live in SOURCE time (the full Darwin take). darwinClips
+// selects which source ranges are kept; the timeline/preview run in OUTPUT time
+// (contiguous, 0..outputDuration). darwinVid plays source time, so we map.
+// No clips => identity (resolveDarwinClips returns one full range).
+function dClips() { return resolveDarwinClips(p().darwinClips || [], p().totalDuration || 0); }
+function outToSrc(t) {
+  const cs = dClips();
+  for (const c of cs) if (t >= c.outStart - 1e-6 && t < c.outEnd + 1e-6) return c.srcStart + (t - c.outStart);
+  const last = cs[cs.length - 1]; return last ? last.srcEnd : t;
+}
+function srcToOut(s) {
+  const cs = dClips();
+  for (const c of cs) { if (s < c.srcStart) return c.outStart; if (s >= c.srcStart && s < c.srcEnd) return c.outStart + (s - c.srcStart); }
+  const last = cs[cs.length - 1]; return last ? last.outEnd : s;
+}
+function outNow() { return darwinVid.src ? srcToOut(darwinVid.currentTime) : 0; }
 
 // ── Trim/cut (source time) ──────────────────────────────────────────────────
 // state.trimIn / state.trimOut define the single kept range against the source
@@ -343,7 +362,6 @@ async function boot() {
 
   await resolveAssetUrls();
   rebuildSegments();
-  if ((p().darwinClips || []).length) patch({ darwinClips: [] }); // remove any stray reel-trim
   renderAssets();
   renderTimeline();
   renderInspector();
@@ -353,6 +371,7 @@ async function boot() {
   wireTrimPopup();
   wireCaptionDrag();
   { const ab = $('alignBtn'); if (ab) ab.onclick = alignToAudio; }
+  { const tb = $('trimDarwinBtn'); if (tb) tb.onclick = openDarwinTrim; }
   // Backfill duration if missing, once the darwin video reports metadata.
   maybeBackfillDuration();
   paint(); // draw frame 0 (sets edge visibility, time readout, playhead) before first play
@@ -374,13 +393,23 @@ async function safeAssetUrl(key) {
 }
 
 function rebuildSegments() {
-  const parsed = parseDarwinScript(p().scriptText || '', { totalDuration: p().totalDuration || null });
-  state.segments = buildRenderPlan(parsed, {
-    totalDuration: p().totalDuration || 0,
+  const srcTotal = p().totalDuration || 0;
+  const parsed = parseDarwinScript(p().scriptText || '', { totalDuration: srcTotal || null });
+  let segs = buildRenderPlan(parsed, {
+    totalDuration: srcTotal || 0,
     defaultLayout: p().defaultLayout || 'stock-top',
     layoutOverrides: p().layoutOverrides || {},
   });
-  state.captions = parsed.captions;
+  let caps = parsed.captions;
+  const clips = p().darwinClips || [];
+  if (clips.length) {
+    const r = applyDarwinClips({ segments: segs, captions: caps }, clips, srcTotal);
+    segs = r.segments; caps = r.captions; state.outputDuration = r.outputDuration;
+  } else {
+    state.outputDuration = srcTotal || (segs[segs.length - 1]?.end || 0);
+  }
+  state.segments = segs;
+  state.captions = caps;
   state.stockClipsNeeded = parsed.stockClipsNeeded;
 }
 
@@ -434,7 +463,7 @@ function darwinKey(seg) { return (seg && (seg.layout === 'stock-top' || seg.layo
 function stockKey(seg) { return (seg && seg.stockIndex != null) ? `stock-${seg.stockIndex}` : null; }
 
 function applyTransforms() {
-  const seg = activeSegment(darwinVid.src ? darwinVid.currentTime : 0);
+  const seg = activeSegment(outNow());
   const dk = darwinKey(seg), sk = stockKey(seg);
   darwinVid.style.transformOrigin = 'center center';
   darwinVid.style.transform = txCss(dk);
@@ -509,7 +538,7 @@ function showPh(seg, hasDarwin, stockUrl) {
 }
 
 function paint() {
-  const t = darwinVid.src ? darwinVid.currentTime : 0;
+  const t = outNow();
   const seg = activeSegment(t);
   applyLayout(seg, t);
   // captions
@@ -538,7 +567,7 @@ function paint() {
 
 function loop() {
   if (state.playing) {
-    if (darwinVid.src && darwinVid.currentTime >= total() - 0.05) {
+    if (darwinVid.src && outNow() >= total() - 0.05) {
       if ($('loopChk') && $('loopChk').checked) { seek(0); }
       else { stopPlayback(); }
     } else paint();
@@ -550,16 +579,17 @@ function loop() {
 function play() {
   if (!darwinVid.src) return;
   state.playing = true; $('playBtn').innerHTML = '&#10073;&#10073;';
+  { const cs = outToSrc(outNow()); if (Math.abs(darwinVid.currentTime - cs) > 0.05) { try { darwinVid.currentTime = cs; } catch (_) {} } }
   darwinVid.play().catch(()=>{});
-  if (state.musicUrl) { musicAud.currentTime = darwinVid.currentTime; musicAud.play().catch(()=>{}); }
-  const seg = activeSegment(darwinVid.currentTime);
+  if (state.musicUrl) { musicAud.currentTime = outNow(); musicAud.play().catch(()=>{}); }
+  const seg = activeSegment(outNow());
   if (seg.stockIndex != null && stockVid.src) stockVid.play().catch(()=>{});
 }
 function stopPlayback() { state.playing = false; $('playBtn').innerHTML = '&#9658;'; darwinVid.pause(); stockVid.pause(); musicAud.pause(); }
 function togglePlay() { state.playing ? stopPlayback() : play(); }
 function seek(t) {
   t = Math.max(0, Math.min(total(), t));
-  if (darwinVid.src) darwinVid.currentTime = t;
+  if (darwinVid.src) darwinVid.currentTime = outToSrc(t);
   if (state.musicUrl) musicAud.currentTime = t;
   lastStockIndex = -2; // force stock re-sync
   paint();
@@ -725,10 +755,27 @@ function renderClipInspector(insp, key) {
 // Trim preview popup (stock clips only): shows the clip with draggable
 // in/out handles over a scrubbable bar, so you set the range by eye.
 // =============================================================================
-const trimState = { index: null, dur: 0, in: 0, out: 0, playing: false };
+const trimState = { index: null, dur: 0, in: 0, out: 0, playing: false, mode: 'stock' };
 const trimVidEl = $('trimVid');
+function openDarwinTrim() {
+  if (!state.darwinUrl) { toast('Add a Darwin video first', 'error'); return; }
+  trimState.mode = 'darwin'; trimState.index = null; trimState.splitLen = 0;
+  const clips = p().darwinClips || [];
+  $('trimTitle').textContent = 'Cut / trim Darwin (set narration start and end)';
+  $('trimModal').classList.remove('hidden');
+  trimVidEl.src = state.darwinUrl;
+  trimVidEl.onloadedmetadata = () => {
+    trimState.dur = (isFinite(trimVidEl.duration) && trimVidEl.duration > 0) ? trimVidEl.duration : (p().totalDuration || 10);
+    trimState.in = clips.length ? Math.min(clips[0].srcStart || 0, trimState.dur) : 0;
+    trimState.out = clips.length ? Math.min(clips[clips.length - 1].srcEnd || trimState.dur, trimState.dur) : trimState.dur;
+    if (!(trimState.out > trimState.in)) { trimState.in = 0; trimState.out = trimState.dur; }
+    try { trimVidEl.currentTime = trimState.in; } catch (_) {}
+    renderTrimBar();
+  };
+}
 function openTrimPopup(idx) {
   if (idx == null) return;
+  trimState.mode = 'stock';
   const url = state.stockUrls[idx];
   if (!url) { toast('Add this stock clip first, then trim', 'error'); return; }
   const t = clipTx(`stock-${idx}`);
@@ -748,6 +795,7 @@ function openTrimPopup(idx) {
   };
 }
 function closeTrimPopup() {
+  trimState.mode = 'stock';
   trimVidEl.pause(); trimState.playing = false; $('trimPlay').innerHTML = '&#9658;';
   trimVidEl.removeAttribute('src'); try { trimVidEl.load(); } catch (_) {}
   $('trimModal').classList.add('hidden');
@@ -775,7 +823,7 @@ function wireTrimPopup() {
       e.preventDefault(); e.stopPropagation();
       const onMove = (ev) => {
         const tt = xToTime(ev.clientX);
-        const minSel = Math.max(0.2, Math.min(trimState.splitLen || 0, trimState.dur));
+        const minSel = trimState.mode === 'darwin' ? Math.min(1, trimState.dur) : Math.max(0.2, Math.min(trimState.splitLen || 0, trimState.dur));
         if (which === 'in') trimState.in = Math.max(0, Math.min(tt, trimState.out - minSel));
         else trimState.out = Math.min(trimState.dur, Math.max(tt, trimState.in + minSel));
         try { trimVidEl.currentTime = which === 'in' ? trimState.in : trimState.out; } catch (_) {}
@@ -801,6 +849,16 @@ function wireTrimPopup() {
     if (!$('trimModal').classList.contains('hidden')) renderTrimBar();
   });
   $('trimSave').onclick = () => {
+    if (trimState.mode === 'darwin') {
+      const full = trimState.in <= 0.05 && trimState.out >= trimState.dur - 0.05;
+      const clips = full ? [] : [{ srcStart: +trimState.in.toFixed(2), srcEnd: +trimState.out.toFixed(2) }];
+      patch({ darwinClips: clips });
+      closeTrimPopup();
+      rebuildSegments(); renderAssets(); renderTimeline(); renderInspector();
+      seek(0); paint();
+      toast(full ? 'Darwin trim cleared (full take)' : 'Darwin trimmed to ' + fmtTime(trimState.out - trimState.in), 'success');
+      return;
+    }
     const idx = trimState.index; if (idx == null) return;
     const full = trimState.in <= 0.05 && trimState.out >= trimState.dur - 0.05;
     setClipTx(`stock-${idx}`, { trimIn: full ? 0 : +trimState.in.toFixed(2), trimOut: full ? 0 : +trimState.out.toFixed(2) });
@@ -815,7 +873,7 @@ function wireTrimPopup() {
 function setClipFit(key, fit) { setClipTx(key, { fit }); paint(); renderInspector(); }
 
 function selectClipFromSlot(which) {
-  const seg = activeSegment(darwinVid.src ? darwinVid.currentTime : 0);
+  const seg = activeSegment(outNow());
   const key = which === 'd' ? darwinKey(seg) : stockKey(seg);
   if (!key) return null;
   state.selectedClip = key;
@@ -1073,7 +1131,7 @@ function renderTimeline() {
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
     };
   });
-  movePlayhead(darwinVid.src ? darwinVid.currentTime : 0);
+  movePlayhead(outNow());
 }
 function movePlayhead(t) {
   const LBL = 78, left = LBL + t * state.pxPerSec;
