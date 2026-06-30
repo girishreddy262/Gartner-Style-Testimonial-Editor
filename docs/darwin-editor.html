@@ -123,6 +123,10 @@
   .tl-block.selected { box-shadow: 0 0 0 2px #fff inset; }
   .tl-block.narr { background: rgba(1,131,255,0.16); border: 1px solid #2a557f; color: #66B0FF; top: 8px; bottom: 8px; }
   .tl-block.music { background: rgba(247,181,56,0.16); border: 1px solid #6b5520; color: #F7B538; top: 10px; bottom: 10px; }
+  .tl-block.cap { background: rgba(148,163,184,0.18); border: 1px solid #5b6675; color: #cbd5e1; top: 9px; bottom: 9px; cursor: grab; }
+  .tl-block.cap.selected { box-shadow: 0 0 0 2px #fff inset; }
+  .tl-cap-edge { position: absolute; top: 0; bottom: 0; left: 0; width: 8px; cursor: ew-resize; z-index: 3; }
+  .tl-block.cap:hover .tl-cap-edge { background: rgba(255,255,255,0.35); }
   .tl-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #FC6A6B; z-index: 8; pointer-events: none; box-shadow: 0 0 6px rgba(252,106,107,0.6); }
   .tl-playhead-grip { position: absolute; top: 0; width: 11px; height: 22px; margin-left: -5px; background: transparent; cursor: ew-resize; z-index: 9; }
   .tl-dim { position: absolute; top: 22px; bottom: 0; background: repeating-linear-gradient(45deg, rgba(0,0,0,0.55), rgba(0,0,0,0.55) 6px, rgba(20,20,22,0.55) 6px, rgba(20,20,22,0.55) 12px); z-index: 7; pointer-events: none; }
@@ -245,6 +249,8 @@
       <button class="btn ghost sm" id="zoomIn">+</button>
       <button class="btn ghost sm" id="undoBtn" title="Undo (Cmd+Z)" disabled>&#8634; Undo</button>
       <button class="btn ghost sm" id="redoBtn" title="Redo (Cmd+Shift+Z)" disabled>&#8635; Redo</button>
+      <button class="btn ghost sm" id="cutBtn" title="Cut at playhead">&#9986; Cut</button>
+      <button class="btn ghost sm" id="delBtn" title="Delete selected (Del)">&#128465; Delete</button>
       <span class="seg-read" id="tlHint">click a split block to change its layout</span>
     </div>
     <div class="tl-scroll" id="tlScroll">
@@ -298,6 +304,8 @@ const state = {
   segments: [], captions: [],
   selectedSplit: null,        // stockIndex of the selected split, or null
   selectedClip: null,         // transform target key: stock-{k} | dhalf-{k} | dfull
+  selectedDarwin: null,       // {start,end} (output time) of a selected Darwin block
+  selectedCaption: null,      // markerLineIdx of selected caption, or null
   pxPerSec: 56,
   playing: false,
   saveTimer: null,
@@ -408,9 +416,25 @@ function rebuildSegments() {
   } else {
     state.outputDuration = srcTotal || (segs[segs.length - 1]?.end || 0);
   }
-  state.segments = segs;
+  state.segments = subdivideDarwin(segs);
   state.captions = caps;
   state.stockClipsNeeded = parsed.stockClipsNeeded;
+}
+// Editor-only: split full-Darwin blocks at darwinCuts (source-time boundaries) so
+// each piece is independently selectable/deletable. The renderer ignores cuts; it
+// only consumes darwinClips (kept ranges), which delete writes to.
+function subdivideDarwin(segs) {
+  const cuts = p().darwinCuts || [];
+  if (!cuts.length) return segs;
+  const out = [];
+  for (const s of segs) {
+    if (s.stockIndex != null) { out.push(s); continue; }
+    const bs = cuts.map(c => srcToOut(c)).filter(o => o > s.start + 0.05 && o < s.end - 0.05).sort((a, b) => a - b);
+    let cur = s.start;
+    for (const o of bs) { out.push({ start: cur, end: o, layout: 'full-darwin', stockIndex: null }); cur = o; }
+    out.push({ start: cur, end: s.end, layout: 'full-darwin', stockIndex: null });
+  }
+  return out;
 }
 
 // =============================================================================
@@ -655,6 +679,33 @@ function effectiveLayout(stockIndex) {
 function renderInspector() {
   const insp = $('inspector');
   if (state.selectedClip) { renderClipInspector(insp, state.selectedClip); return; }
+  if (state.selectedCaption != null) {
+    const cue = getCaptionCues().find(c => c.markerLineIdx === state.selectedCaption);
+    const txt = cue ? cue.text : '';
+    const startO = cue ? srcToOut(cue.srcT) : 0;
+    insp.innerHTML = `
+      <div class="insp-sec">
+        <div class="insp-h">Caption</div>
+        <div class="insp-meta">starts ${fmtTime(startO)} \u00b7 drag the block on the Captions track to retime</div>
+        <textarea id="capEdit" class="script" style="height:60px;margin-top:8px" spellcheck="false" placeholder="on-screen caption text">${escapeHtml(txt)}</textarea>
+        <div class="insp-meta" style="margin-top:6px">Clamps to 2 lines on screen. Keep it short.</div>
+      </div>`;
+    const ce = $('capEdit');
+    if (ce) ce.oninput = () => { setCaptionText(state.selectedCaption, ce.value); rebuildSegments(); renderTimeline(); paint(); };
+    return;
+  }
+  if (state.selectedDarwin) {
+    const d = state.selectedDarwin;
+    insp.innerHTML = `
+      <div class="insp-sec">
+        <div class="insp-h">Darwin section</div>
+        <div class="insp-meta">${fmtTime(d.start)} \u2013 ${fmtTime(d.end)} \u00b7 narration only</div>
+        <button class="btn sm" id="cutOutBtn" style="width:100%;margin-top:10px">Cut this section out</button>
+        <div class="insp-meta" style="margin-top:8px">Removing it shortens the reel and shifts everything after it. Use the Cut button on the timeline to split a Darwin run first, then delete the part you do not want. Cmd+Z to undo.</div>
+      </div>`;
+    const b = $('cutOutBtn'); if (b) b.onclick = deleteSelected;
+    return;
+  }
   if (state.selectedSplit != null) {
     const idx = state.selectedSplit;
     const cur = effectiveLayout(idx);
@@ -702,8 +753,8 @@ function renderInspector() {
   }
 }
 
-function selectSplit(idx) { state.selectedSplit = idx; state.selectedClip = `stock-${idx}`; renderInspector(); renderAssets(); renderTimeline(); const seg = state.segments.find(s => s.stockIndex === idx); if (seg) seek(seg.start); }
-function clearSelection() { state.selectedSplit = null; state.selectedClip = null; renderInspector(); renderAssets(); renderTimeline(); applyTransforms(); }
+function selectSplit(idx) { state.selectedSplit = idx; state.selectedClip = `stock-${idx}`; state.selectedDarwin = null; state.selectedCaption = null; renderInspector(); renderAssets(); renderTimeline(); const seg = state.segments.find(s => s.stockIndex === idx); if (seg) seek(seg.start); }
+function clearSelection() { state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedCaption = null; renderInspector(); renderAssets(); renderTimeline(); applyTransforms(); }
 
 function renderClipInspector(insp, key) {
   const isStock = key.startsWith('stock-'), isDHalf = key.startsWith('dhalf-');
@@ -732,7 +783,7 @@ function renderClipInspector(insp, key) {
       ${layoutGrid}
       <div class="insp-h">Frame</div>
       <div class="layout-grid" style="grid-template-columns:1fr 1fr;margin-bottom:10px">
-        <div class="layout-opt ${t.fit !== 'contain' ? 'active' : ''}" onclick="setClipFit('${key}','cover')"><div class="layout-name">Fill (crop to edges)</div></div>
+        <div class="layout-opt ${t.fit !== 'contain' ? 'active' : ''}" onclick="setClipFit('${key}','cover')"><div class="layout-name">Crop to original</div></div>
         <div class="layout-opt ${t.fit === 'contain' ? 'active' : ''}" onclick="setClipFit('${key}','contain')"><div class="layout-name">Fit (whole, uncut)</div></div>
       </div>
       <div class="field"><label>Scale <span class="val" id="txScaleVal">${Math.round(t.scale * 100)}%</span></label><input type="range" id="txScale" min="100" max="400" value="${Math.round(t.scale * 100)}"></div>
@@ -1058,6 +1109,170 @@ function setMarkerTime(lineIdx, t) {
   const sb = $('scriptText'); if (sb) sb.value = lines.join('\n');
 }
 
+// =============================================================================
+// Universal cut (razor) + delete. Works on the Darwin spine and on stock clips.
+//   Cut darwin run  -> insert a bare [MM:SS] cue, splitting it in two.
+//   Cut stock clip  -> insert a /split start mid-clip, duplicating the stock key.
+//   Delete stock    -> strip the split directives (becomes full Darwin) + drop key.
+//   Delete darwin   -> subtract that source range from darwinClips (middle cut).
+// All edits are script + project mutations, so render parity is automatic.
+// =============================================================================
+function tsOf(t) { const mm = Math.floor(Math.max(0, t) / 60), ss = Math.round(Math.max(0, t) % 60); return `[${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}]`; }
+function scriptLines() { return (p().scriptText || '').split(/\r?\n/); }
+function findSplits(lines) {
+  const res = []; let cur = null;
+  for (let i = 0; i < lines.length; i++) {
+    if (/\/split\s+start/i.test(lines[i])) { if (cur) res.push(cur); cur = { startLineIdx: i, endLineIdx: null }; }
+    else if (/\/split\s+end/i.test(lines[i])) { if (cur) { cur.endLineIdx = i; res.push(cur); cur = null; } }
+  }
+  if (cur) res.push(cur);
+  return res;
+}
+function reindexStock(ct, op, at) {
+  const out = {};
+  for (const k in ct) {
+    const m = k.match(/^(stock|dhalf)-(\d+)$/);
+    if (!m) { out[k] = ct[k]; continue; }
+    const pre = m[1], n = +m[2];
+    if (op === 'insert') out[`${pre}-${n >= at ? n + 1 : n}`] = ct[k];
+    else { if (n === at) continue; out[`${pre}-${n > at ? n - 1 : n}`] = ct[k]; }
+  }
+  return out;
+}
+function insertCueMarker(srcT) {
+  const lines = scriptLines(), markers = getMarkers();
+  let nextLine = lines.length;
+  for (const m of markers) { if (m.t > srcT + 1e-6) { nextLine = m.lineIdx; break; } }
+  lines.splice(nextLine, 0, tsOf(srcT));
+  const s = lines.join('\n'); patch({ scriptText: s }); const sb = $('scriptText'); if (sb) sb.value = s;
+}
+function splitStockAt(idx, srcT) {
+  const lines = scriptLines(), sp = findSplits(lines);
+  if (!sp[idx]) return;
+  const at = sp[idx].endLineIdx != null ? sp[idx].endLineIdx : Math.min(lines.length, sp[idx].startLineIdx + 2);
+  lines.splice(at, 0, `${tsOf(srcT)} /split start`, '');
+  let ct = Object.assign({}, p().clipTransforms || {});
+  ct = reindexStock(ct, 'insert', idx + 1);
+  if (ct[`stock-${idx}`]) ct[`stock-${idx + 1}`] = Object.assign({}, ct[`stock-${idx}`], { trimIn: 0, trimOut: 0 });
+  const keys = (p().stockS3Keys || []).slice(); keys.splice(idx + 1, 0, keys[idx]);
+  const names = (p().stockNames || []).slice(); names.splice(idx + 1, 0, names[idx]);
+  const hints = (p().footageHints || []).slice(); if (hints.length > idx) hints.splice(idx + 1, 0, hints[idx]);
+  state.stockUrls.splice(idx + 1, 0, state.stockUrls[idx]);
+  const s = lines.join('\n');
+  patch({ scriptText: s, stockS3Keys: keys, stockNames: names, footageHints: hints, clipTransforms: ct });
+  const sb = $('scriptText'); if (sb) sb.value = s;
+}
+function deleteStockSplit(idx) {
+  const lines = scriptLines(), sp = findSplits(lines);
+  if (!sp[idx]) return;
+  lines[sp[idx].startLineIdx] = lines[sp[idx].startLineIdx].replace(/\s*\/split\s+start/i, '');
+  if (sp[idx].endLineIdx != null) lines[sp[idx].endLineIdx] = lines[sp[idx].endLineIdx].replace(/\s*\/split\s+end/i, '');
+  let ct = reindexStock(Object.assign({}, p().clipTransforms || {}), 'delete', idx);
+  const keys = (p().stockS3Keys || []).slice(); keys.splice(idx, 1);
+  const names = (p().stockNames || []).slice(); names.splice(idx, 1);
+  const hints = (p().footageHints || []).slice(); if (hints.length > idx) hints.splice(idx, 1);
+  state.stockUrls.splice(idx, 1);
+  const s = lines.join('\n');
+  patch({ scriptText: s, stockS3Keys: keys, stockNames: names, footageHints: hints, clipTransforms: ct });
+  const sb = $('scriptText'); if (sb) sb.value = s;
+}
+function subtractRange(clips, srcTotal, a, b) {
+  const res = resolveDarwinClips(clips, srcTotal), out = [];
+  for (const c of res) {
+    if (b <= c.srcStart || a >= c.srcEnd) { out.push({ srcStart: c.srcStart, srcEnd: c.srcEnd }); continue; }
+    if (a > c.srcStart) out.push({ srcStart: c.srcStart, srcEnd: a });
+    if (b < c.srcEnd) out.push({ srcStart: b, srcEnd: c.srcEnd });
+  }
+  return out.filter(r => r.srcEnd - r.srcStart > 0.05).map(r => ({ srcStart: +r.srcStart.toFixed(2), srcEnd: +r.srcEnd.toFixed(2) }));
+}
+function cutDarwinRange(outStart, outEnd) {
+  const srcTotal = p().totalDuration || 0;
+  const a = outToSrc(outStart), b = outToSrc(Math.min(outEnd, total()));
+  const clips = subtractRange(p().darwinClips || [], srcTotal, a, b);
+  const full = clips.length === 1 && clips[0].srcStart <= 0.05 && clips[0].srcEnd >= srcTotal - 0.05;
+  const cuts = (p().darwinCuts || []).filter(c => c <= a + 0.05 || c >= b - 0.05);
+  patch({ darwinClips: full ? [] : clips, darwinCuts: cuts });
+}
+function cutAtPlayhead() {
+  const t = outNow(), srcT = outToSrc(t);
+  if (state.selectedSplit != null) {
+    const seg = state.segments.find(s => s.stockIndex === state.selectedSplit);
+    if (!seg || t <= seg.start + 0.2 || t >= seg.end - 0.2) { toast('Move the playhead inside the selected clip to cut it', 'error'); return; }
+    splitStockAt(state.selectedSplit, srcT);
+  } else {
+    const seg = activeSegment(t);
+    if (seg.stockIndex != null) { toast('That point is on a stock clip; select it first to cut the clip', 'error'); return; }
+    const cuts = (p().darwinCuts || []).slice();
+    if (cuts.some(c => Math.abs(c - srcT) < 0.15)) { toast('Already a cut near here', 'error'); return; }
+    cuts.push(+srcT.toFixed(2)); cuts.sort((a, b) => a - b);
+    patch({ darwinCuts: cuts });
+  }
+  state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null;
+  rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); paint();
+  toast('Cut added', 'success');
+}
+function deleteSelected() {
+  if (state.selectedSplit != null) {
+    deleteStockSplit(state.selectedSplit);
+    state.selectedSplit = null; state.selectedClip = null;
+    rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); paint();
+    toast('Stock clip deleted (now full Darwin)', 'success');
+  } else if (state.selectedDarwin) {
+    cutDarwinRange(state.selectedDarwin.start, state.selectedDarwin.end);
+    state.selectedDarwin = null;
+    rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); seek(0); paint();
+    toast('Darwin section cut out', 'success');
+  } else { toast('Select a clip or a Darwin block first, then delete', 'error'); }
+}
+function selectDarwinSeg(start, end) {
+  state.selectedDarwin = { start, end }; state.selectedSplit = null; state.selectedClip = null; state.selectedCaption = null;
+  renderInspector(); renderAssets(); renderTimeline(); seek(start);
+}
+
+// ── Caption track ─────────────────────────────────────────────────────────────
+// Each [MM:SS] cue carries a caption (inline after the marker, or the next text
+// line). The track lets you retime a caption (moves its cue's [MM:SS]) and edit
+// its text. Both are plain script edits, so the renderer needs no changes.
+function getCaptionCues() {
+  const lines = scriptLines(), cues = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^\s*\[(\d+):(\d+)\]/);
+    if (!m) continue;
+    const srcT = (+m[1]) * 60 + (+m[2]);
+    let capLineIdx = i, inline = true;
+    let cap = lines[i].replace(/^\s*\[\d+:\d+\]\s*/, '').replace(/\/split\s+\w+/ig, '').trim();
+    if (!cap) {
+      inline = false;
+      for (let j = i + 1; j < lines.length; j++) { const t = lines[j].trim(); if (!t) continue; if (/^\[\d+:\d+\]/.test(t)) break; cap = t; capLineIdx = j; break; }
+    }
+    cues.push({ markerLineIdx: i, capLineIdx, inline, text: cap, srcT });
+  }
+  return cues;
+}
+function setCaptionText(markerLineIdx, text) {
+  const lines = scriptLines();
+  const cues = getCaptionCues();
+  const cue = cues.find(c => c.markerLineIdx === markerLineIdx);
+  if (!cue) return;
+  const clean = (text || '').replace(/\s*[\u2013\u2014]\s*/g, ', ').replace(/\r?\n/g, ' ').trim();
+  if (cue.inline) {
+    const m = lines[markerLineIdx].match(/^(\s*\[\d+:\d+\]\s*)(\/split\s+\w+\s*)?/i);
+    const prefix = m ? m[0] : (lines[markerLineIdx].match(/^\s*\[\d+:\d+\]\s*/) || [''])[0];
+    lines[markerLineIdx] = prefix + clean;
+  } else if (cue.capLineIdx !== cue.markerLineIdx) {
+    lines[cue.capLineIdx] = clean;
+  } else {
+    lines.splice(markerLineIdx + 1, 0, clean);
+  }
+  const s = lines.join('\n'); patch({ scriptText: s }); const sb = $('scriptText'); if (sb) sb.value = s;
+}
+function selectCaption(markerLineIdx) {
+  state.selectedCaption = markerLineIdx; state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null;
+  renderInspector(); renderAssets(); renderTimeline();
+  const cue = getCaptionCues().find(c => c.markerLineIdx === markerLineIdx);
+  if (cue) seek(srcToOut(cue.srcT));
+}
+
 function renderTimeline() {
   const inner = $('tlInner');
   const T = total() || 1;
@@ -1073,9 +1288,10 @@ function renderTimeline() {
   // video lane blocks
   const vBlocks = state.segments.map(seg => {
     const left = seg.start * state.pxPerSec, w = (seg.end - seg.start) * state.pxPerSec;
-    const sel = (seg.stockIndex != null && seg.stockIndex === state.selectedSplit) ? 'selected' : '';
     const isSplit = seg.stockIndex != null;
-    const click = isSplit ? `onclick="selectSplit(${seg.stockIndex})"` : `onclick="clearSelection()"`;
+    const selD = state.selectedDarwin && Math.abs(state.selectedDarwin.start - seg.start) < 0.05 && Math.abs(state.selectedDarwin.end - seg.end) < 0.05;
+    const sel = isSplit ? ((seg.stockIndex === state.selectedSplit) ? 'selected' : '') : (selD ? 'selected' : '');
+    const click = isSplit ? `onclick="selectSplit(${seg.stockIndex})"` : `onclick="selectDarwinSeg(${seg.start},${seg.end})"`;
     const label = seg.layout === 'full-darwin' ? 'Darwin' : `${seg.layout.replace('-', ' ')} \u00b7 clip ${seg.stockIndex + 1}`;
     const edges = isSplit ? `<div class="tl-edge l" data-stock="${seg.stockIndex}" data-edge="l"></div><div class="tl-edge r" data-stock="${seg.stockIndex}" data-edge="r"></div>` : '';
     return `<div class="tl-block ${seg.layout} ${sel}" style="left:${left}px;width:${Math.max(2,w)}px" ${click} title="${label}">${edges}${w > 60 ? label : ''}</div>`;
@@ -1084,16 +1300,30 @@ function renderTimeline() {
   const narrBlock = state.darwinUrl || p().darwinS3Key ? `<div class="tl-block narr" style="left:0px;width:${T*state.pxPerSec}px">narration (Darwin)</div>` : '';
   const musicBlock = p().musicS3Key ? `<div class="tl-block music" style="left:0px;width:${T*state.pxPerSec}px">${escapeHtml(p().musicName||'music')}</div>` : '';
 
+  // caption track: one block per caption cue, positioned in output time
+  const capCues = getCaptionCues();
+  const capBlocks = capCues.map((c, i) => {
+    if (!c.text) return '';
+    const startO = srcToOut(c.srcT);
+    const nextT = i + 1 < capCues.length ? capCues[i + 1].srcT : (p().totalDuration || 0);
+    const endO = srcToOut(nextT);
+    if (endO - startO < 0.05) return '';
+    const left = startO * state.pxPerSec, w = (endO - startO) * state.pxPerSec;
+    const selc = state.selectedCaption === c.markerLineIdx ? 'selected' : '';
+    return `<div class="tl-block cap ${selc}" style="left:${left}px;width:${Math.max(2,w)}px" data-cap="${c.markerLineIdx}" title="${escapeHtml(c.text)}"><div class="tl-cap-edge" data-cap="${c.markerLineIdx}"></div>${w > 40 ? escapeHtml(c.text) : ''}</div>`;
+  }).join('');
+
   inner.style.width = (W + 20) + 'px';
   inner.innerHTML = `
     <div class="tl-ruler" id="tlRuler">${ticks}</div>
     <div class="tl-row"><div class="tl-rowlabel">Video</div><div class="tl-lane">${vBlocks}</div></div>
+    <div class="tl-row"><div class="tl-rowlabel">Captions</div><div class="tl-lane">${capBlocks || '<div class="insp-meta" style="padding-left:8px;align-self:center">none</div>'}</div></div>
     <div class="tl-row"><div class="tl-rowlabel">Narration</div><div class="tl-lane">${narrBlock}</div></div>
     <div class="tl-row"><div class="tl-rowlabel">Music</div><div class="tl-lane">${musicBlock || '<div class="insp-meta" style="padding-left:8px;align-self:center">none</div>'}</div></div>
     <div class="tl-playhead" id="tlPlayhead" style="left:${x(0)}px"></div>
     <div class="tl-playhead-grip" id="tlGrip" style="left:${x(0)}px"></div>`;
 
-  $('tlHint').textContent = 'click a split to select it, drag its left/right edge to resize; click a clip in the preview to scale or position it';
+  $('tlHint').textContent = 'click any block to select; Cut splits at the playhead, Delete removes the selection (stock clip or Darwin section)';
 
   // seek by clicking ruler
   const ruler = $('tlRuler');
@@ -1132,6 +1362,33 @@ function renderTimeline() {
     };
   });
   movePlayhead(outNow());
+
+  // caption blocks: click to select/edit, drag to retime (moves the cue [MM:SS])
+  inner.querySelectorAll('.tl-block.cap').forEach(blk => {
+    const lineIdx = +blk.dataset.cap;
+    blk.onclick = (e) => { if (blk.dataset.dragged === '1') { blk.dataset.dragged = '0'; return; } selectCaption(lineIdx); };
+    blk.onmousedown = (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const markers = getMarkers();
+      let mi = markers.findIndex(m => m.lineIdx === lineIdx);
+      if (mi < 0) return;
+      const lo = mi > 0 ? markers[mi - 1].t + 0.3 : 0;
+      const hi = mi < markers.length - 1 ? markers[mi + 1].t - 0.3 : (p().totalDuration || total());
+      const rulerRect = $('tlRuler').getBoundingClientRect();
+      let moved = false;
+      const onMove = (ev) => {
+        moved = true; blk.dataset.dragged = '1';
+        let srcT = ($('tlScroll').scrollLeft + ev.clientX - rulerRect.left - 78) / state.pxPerSec; // output time
+        srcT = outToSrc(srcT);
+        srcT = Math.max(lo, Math.min(hi, srcT));
+        setMarkerTime(lineIdx, srcT);
+        rebuildSegments(); renderTimeline(); paint();
+      };
+      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); if (!moved) blk.dataset.dragged = '0'; };
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    };
+  });
 }
 function movePlayhead(t) {
   const LBL = 78, left = LBL + t * state.pxPerSec;
@@ -1143,6 +1400,15 @@ $('zoomIn').onclick = () => { state.pxPerSec = Math.min(240, state.pxPerSec * 1.
 $('zoomOut').onclick = () => { state.pxPerSec = Math.max(12, state.pxPerSec / 1.4); renderTimeline(); };
 $('undoBtn').onclick = () => doUndo();
 $('redoBtn').onclick = () => doRedo();
+{ const c = $('cutBtn'); if (c) c.onclick = cutAtPlayhead; }
+{ const d = $('delBtn'); if (d) d.onclick = deleteSelected; }
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
+  if (state.selectedSplit == null && !state.selectedDarwin) return;
+  e.preventDefault(); deleteSelected();
+});
 document.addEventListener('keydown', (e) => {
   if (!(e.metaKey || e.ctrlKey)) return;
   const k = e.key.toLowerCase();
