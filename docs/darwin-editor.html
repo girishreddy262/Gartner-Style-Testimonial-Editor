@@ -251,6 +251,7 @@
       <button class="btn ghost sm" id="redoBtn" title="Redo (Cmd+Shift+Z)" disabled>&#8635; Redo</button>
       <button class="btn ghost sm" id="cutBtn" title="Cut at playhead">&#9986; Cut</button>
       <button class="btn ghost sm" id="delBtn" title="Delete selected (Del)">&#128465; Delete</button>
+      <button class="btn ghost sm" id="addCapBtn" title="Add caption at playhead">&#43; Caption</button>
       <span class="seg-read" id="tlHint">click a split block to change its layout</span>
     </div>
     <div class="tl-scroll" id="tlScroll">
@@ -688,10 +689,12 @@ function renderInspector() {
         <div class="insp-h">Caption</div>
         <div class="insp-meta">starts ${fmtTime(startO)} \u00b7 drag the block on the Captions track to retime</div>
         <textarea id="capEdit" class="script" style="height:60px;margin-top:8px" spellcheck="false" placeholder="on-screen caption text">${escapeHtml(txt)}</textarea>
-        <div class="insp-meta" style="margin-top:6px">Clamps to 2 lines on screen. Keep it short.</div>
+        <button class="btn sm" id="capDelBtn" style="width:100%;margin-top:8px">Delete this caption</button>
+        <div class="insp-meta" style="margin-top:6px">Clamps to 2 lines on screen. Keep it short. Add a new caption with the + Caption button on the timeline.</div>
       </div>`;
     const ce = $('capEdit');
     if (ce) ce.oninput = () => { setCaptionText(state.selectedCaption, ce.value); rebuildSegments(); renderTimeline(); paint(); };
+    const cd = $('capDelBtn'); if (cd) cd.onclick = deleteSelected;
     return;
   }
   if (state.selectedDarwin) {
@@ -1146,14 +1149,21 @@ function insertCueMarker(srcT) {
   lines.splice(nextLine, 0, tsOf(srcT));
   const s = lines.join('\n'); patch({ scriptText: s }); const sb = $('scriptText'); if (sb) sb.value = s;
 }
-function splitStockAt(idx, srcT) {
+function splitStockAt(idx, segStart, cutOut) {
   const lines = scriptLines(), sp = findSplits(lines);
   if (!sp[idx]) return;
+  const srcT = outToSrc(cutOut);            // narration time for the new split boundary
+  const offset = Math.max(0.1, cutOut - segStart); // real seconds the first half occupies
+  const t0 = clipTx(`stock-${idx}`);
+  const firstIn = t0.trimIn || 0;
+  const cutSrc = +(firstIn + offset).toFixed(2);    // source position of the stock at the cut
   const at = sp[idx].endLineIdx != null ? sp[idx].endLineIdx : Math.min(lines.length, sp[idx].startLineIdx + 2);
   lines.splice(at, 0, `${tsOf(srcT)} /split start`, '');
   let ct = Object.assign({}, p().clipTransforms || {});
   ct = reindexStock(ct, 'insert', idx + 1);
-  if (ct[`stock-${idx}`]) ct[`stock-${idx + 1}`] = Object.assign({}, ct[`stock-${idx}`], { trimIn: 0, trimOut: 0 });
+  // first half plays [firstIn, cutSrc]; second half continues [cutSrc, original out/end]
+  ct[`stock-${idx}`] = Object.assign({}, t0, { trimOut: cutSrc });
+  ct[`stock-${idx + 1}`] = Object.assign({}, t0, { trimIn: cutSrc, trimOut: t0.trimOut || 0 });
   const keys = (p().stockS3Keys || []).slice(); keys.splice(idx + 1, 0, keys[idx]);
   const names = (p().stockNames || []).slice(); names.splice(idx + 1, 0, names[idx]);
   const hints = (p().footageHints || []).slice(); if (hints.length > idx) hints.splice(idx + 1, 0, hints[idx]);
@@ -1194,25 +1204,29 @@ function cutDarwinRange(outStart, outEnd) {
   patch({ darwinClips: full ? [] : clips, darwinCuts: cuts });
 }
 function cutAtPlayhead() {
-  const t = outNow(), srcT = outToSrc(t);
-  if (state.selectedSplit != null) {
-    const seg = state.segments.find(s => s.stockIndex === state.selectedSplit);
-    if (!seg || t <= seg.start + 0.2 || t >= seg.end - 0.2) { toast('Move the playhead inside the selected clip to cut it', 'error'); return; }
-    splitStockAt(state.selectedSplit, srcT);
+  const t = outNow();
+  const seg = activeSegment(t);
+  if (!seg || t <= seg.start + 0.15 || t >= seg.end - 0.15) { toast('Move the playhead inside a clip, then Cut', 'error'); return; }
+  if (seg.stockIndex != null) {
+    splitStockAt(seg.stockIndex, seg.start, t);
   } else {
-    const seg = activeSegment(t);
-    if (seg.stockIndex != null) { toast('That point is on a stock clip; select it first to cut the clip', 'error'); return; }
+    const srcT = outToSrc(t);
     const cuts = (p().darwinCuts || []).slice();
     if (cuts.some(c => Math.abs(c - srcT) < 0.15)) { toast('Already a cut near here', 'error'); return; }
     cuts.push(+srcT.toFixed(2)); cuts.sort((a, b) => a - b);
     patch({ darwinCuts: cuts });
   }
-  state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null;
+  state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedCaption = null;
   rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); paint();
   toast('Cut added', 'success');
 }
 function deleteSelected() {
-  if (state.selectedSplit != null) {
+  if (state.selectedCaption != null) {
+    deleteCaption(state.selectedCaption);
+    state.selectedCaption = null;
+    rebuildSegments(); renderTimeline(); renderInspector(); paint();
+    toast('Caption deleted', 'success');
+  } else if (state.selectedSplit != null) {
     deleteStockSplit(state.selectedSplit);
     state.selectedSplit = null; state.selectedClip = null;
     rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); paint();
@@ -1271,6 +1285,37 @@ function selectCaption(markerLineIdx) {
   renderInspector(); renderAssets(); renderTimeline();
   const cue = getCaptionCues().find(c => c.markerLineIdx === markerLineIdx);
   if (cue) seek(srcToOut(cue.srcT));
+}
+function addCaptionAtPlayhead() {
+  const srcT = outToSrc(outNow());
+  const lines = scriptLines(), markers = getMarkers();
+  const near = markers.find(m => Math.abs(m.t - srcT) < 0.2);
+  if (near) { selectCaption(near.lineIdx); toast('A cue already exists here, selected it', 'success'); return; }
+  let nextLine = lines.length;
+  for (const m of markers) { if (m.t > srcT + 1e-6) { nextLine = m.lineIdx; break; } }
+  lines.splice(nextLine, 0, tsOf(srcT), 'New caption');
+  const s = lines.join('\n'); patch({ scriptText: s }); const sb = $('scriptText'); if (sb) sb.value = s;
+  rebuildSegments(); renderTimeline();
+  selectCaption(nextLine);
+  toast('Caption added, edit the text on the right', 'success');
+}
+function deleteCaption(markerLineIdx) {
+  const lines = scriptLines();
+  const cue = getCaptionCues().find(c => c.markerLineIdx === markerLineIdx);
+  if (!cue) return;
+  const hasSplit = /\/split\s+\w+/i.test(lines[markerLineIdx]);
+  if (hasSplit) {
+    // keep the split + its timing, only clear the caption text
+    if (cue.inline) lines[markerLineIdx] = lines[markerLineIdx].replace(/^(\s*\[\d+:\d+\]\s*\/split\s+\w+).*/i, '$1');
+    else if (cue.capLineIdx !== markerLineIdx) lines.splice(cue.capLineIdx, 1);
+  } else {
+    // plain caption cue: remove caption line + the cue marker line
+    const rm = [];
+    if (cue.capLineIdx !== markerLineIdx) rm.push(cue.capLineIdx);
+    rm.push(markerLineIdx);
+    rm.sort((a, b) => b - a).forEach(i => lines.splice(i, 1));
+  }
+  const s = lines.join('\n'); patch({ scriptText: s }); const sb = $('scriptText'); if (sb) sb.value = s;
 }
 
 function renderTimeline() {
@@ -1402,11 +1447,12 @@ $('undoBtn').onclick = () => doUndo();
 $('redoBtn').onclick = () => doRedo();
 { const c = $('cutBtn'); if (c) c.onclick = cutAtPlayhead; }
 { const d = $('delBtn'); if (d) d.onclick = deleteSelected; }
+{ const a = $('addCapBtn'); if (a) a.onclick = addCaptionAtPlayhead; }
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Delete' && e.key !== 'Backspace') return;
   const tag = (e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
-  if (state.selectedSplit == null && !state.selectedDarwin) return;
+  if (state.selectedSplit == null && !state.selectedDarwin && state.selectedCaption == null) return;
   e.preventDefault(); deleteSelected();
 });
 document.addEventListener('keydown', (e) => {
