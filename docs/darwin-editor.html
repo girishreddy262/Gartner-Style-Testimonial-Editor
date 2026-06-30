@@ -70,7 +70,8 @@
   .tl-edge.l { left: 0; } .tl-edge.r { right: 0; }
   .tl-block:hover .tl-edge { background: rgba(255,255,255,0.35); }
   .frame .cap { position: absolute; left: 6%; right: 6%; display: flex; justify-content: center; pointer-events: none; z-index: 6; }
-  .frame .cap span { background: rgba(0,0,0,0.55); border-radius: 10px; color: #fff; text-align: center; line-height: 1.25; padding: 2.2% 4%; max-width: 88%; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .frame .cap span { background: rgba(0,0,0,0.55); border-radius: 10px; color: #fff; text-align: center; line-height: 1.25; padding: 2.2% 4%; max-width: 88%; max-height: 30%; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; pointer-events: auto; cursor: grab; }
+  .frame .cap span:active { cursor: grabbing; }
   .edge { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: rgba(255,255,255,0.18); pointer-events: none; z-index: 5; }
 
   .transport { display: flex; align-items: center; gap: 14px; padding: 9px 16px; border-top: 1px solid #2a2a2e; background: #18181b; }
@@ -347,6 +348,7 @@ async function boot() {
   initPreviewInteract();
   wireDocImport();
   wireTrimPopup();
+  wireCaptionDrag();
   // Backfill duration if missing, once the darwin video reports metadata.
   maybeBackfillDuration();
   paint(); // draw frame 0 (sets edge visibility, time readout, playhead) before first play
@@ -520,8 +522,7 @@ function paint() {
     $('capText').style.color = cs.color || '#fff';
     const pos = cs.position || 'bottom';
     if (pos === 'top') { bar.style.top = (180 * scale) + 'px'; bar.style.bottom = 'auto'; bar.style.transform = 'none'; }
-    else if (pos === 'center') { bar.style.top = '50%'; bar.style.bottom = 'auto'; bar.style.transform = 'translateY(-50%)'; }
-    else { bar.style.bottom = ((cs.bottom != null ? cs.bottom : 220) * scale) + 'px'; bar.style.top = 'auto'; bar.style.transform = 'none'; }
+    else if (pos === 'center') { bar.style.top = '50%'; bar.style.bottom = 'auto'; bar.style.transform = 'translateY(-50%)'; }    else { bar.style.bottom = ((cs.bottom != null ? cs.bottom : 220) * scale) + 'px'; bar.style.top = 'auto'; bar.style.transform = 'none'; }
   } else { bar.classList.add('hidden'); }
   // readouts + playhead
   $('timeRead').textContent = `${fmtTime(t)} / ${fmtTime(total())}`;
@@ -655,14 +656,14 @@ function renderInspector() {
         <div class="field">
           <label>Caption position</label>
           <select id="capPos" class="btn" style="width:100%">
-            ${[['bottom','Bottom'],['center','Center'],['top','Top']].map(([v,n])=>`<option value="${v}" ${((p().captionStyle||{}).position||'bottom')===v?'selected':''}>${n}</option>`).join('')}
+            ${[['bottom','Bottom'],['center','Center'],['top','Top'],['custom','Custom (dragged)']].map(([v,n])=>`<option value="${v}" ${((p().captionStyle||{}).position||'bottom')===v?'selected':''}>${n}</option>`).join('')}
           </select>
         </div>
-        <div class="insp-meta">Captions are clamped to 2 lines. Click a split block in the timeline to set its layout; drag a split edge to resize it.</div>
+        <div class="insp-meta">Captions clamp to 2 lines. Drag the caption in the preview to place it anywhere. Edit caption text by selecting a split clip.</div>
       </div>`;
     const dl = $('defLayout'); if (dl) dl.onchange = () => { patch({ defaultLayout: dl.value }); rebuildSegments(); renderTimeline(); paint(); };
     const mr = $('mvRange'); if (mr) mr.oninput = () => { const v = mr.value / 100; $('mvVal').textContent = mr.value + '%'; musicAud.volume = v; patch({ musicVolume: v }); };
-    const cp = $('capPos'); if (cp) cp.onchange = () => { patch({ captionStyle: { ...(p().captionStyle||{}), position: cp.value } }); paint(); };
+    const cp = $('capPos'); if (cp) cp.onchange = () => { const v = cp.value; patch({ captionStyle: { ...(p().captionStyle||{}), position: v, bottom: v === 'bottom' ? 220 : (p().captionStyle||{}).bottom } }); paint(); };
   }
 }
 
@@ -884,6 +885,23 @@ function wireDocImport() {
       toast(`Imported ${splitCount} split${splitCount === 1 ? '' : 's'} from doc`, 'success');
     } catch (e) { toast('Import failed: ' + e.message, 'error'); }
   };
+}
+
+function wireCaptionDrag() {
+  const span = $('capText');
+  if (!span) return;
+  span.addEventListener('mousedown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const fr = $('frame').getBoundingClientRect();
+    const onMove = (ev) => {
+      const fromBottom = Math.max(40, Math.min(fr.height - 20, fr.bottom - ev.clientY));
+      const bottom1920 = Math.round(fromBottom / fr.height * 1920);
+      patch({ captionStyle: { ...(p().captionStyle || {}), position: 'custom', bottom: bottom1920 } });
+      paint();
+    };
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+  });
 }
 
 function setLayout(idx, layout) {
