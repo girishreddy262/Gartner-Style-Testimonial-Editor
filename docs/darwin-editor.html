@@ -311,7 +311,9 @@ const state = {
   selectedClip: null,
   darwinFilmstrip: null, _filmUrl: null,         // transform target key: stock-{k} | dhalf-{k} | dfull
   selectedDarwin: null,       // {start,end} (output time) of a selected Darwin block
-  selectedCaption: null,      // markerLineIdx of selected caption, or null
+  selectedCaption: null,      // caption id of the primary selected caption, or null
+  selCaps: [],                // caption ids in the multi-selection
+  clipboard: null,            // { kind:'captions', items:[{start,end,text}], base }
   selectedGap: null,          // {start,end} (output time) of a selected black gap
   pxPerSec: 56,
   playing: false,
@@ -742,6 +744,18 @@ function renderInspector() {
   const insp = $('inspector');
   if (state.selectedClip) { renderClipInspector(insp, state.selectedClip); return; }
   if (state.selectedCaption != null) {
+    if ((state.selCaps || []).length > 1) {
+      insp.innerHTML = `
+        <div class="insp-sec">
+          <div class="insp-h">${state.selCaps.length} captions selected</div>
+          <div class="insp-meta">Cmd or Ctrl click a caption to add or remove it. Copy Cmd+C, Paste Cmd+V, Duplicate Cmd+D, or Delete. Drag any one to move them all.</div>
+          <button class="btn sm" id="capDupBtn" style="width:100%;margin-top:8px">Duplicate selected</button>
+          <button class="btn sm" id="capDelBtn" style="width:100%;margin-top:8px">Delete selected</button>
+        </div>`;
+      const du = $('capDupBtn'); if (du) du.onclick = duplicateSelection;
+      const de = $('capDelBtn'); if (de) de.onclick = deleteSelected;
+      return;
+    }
     const cue = caps().find(c => c.id === state.selectedCaption);
     const txt = cue ? cue.text : '';
     insp.innerHTML = `
@@ -829,7 +843,7 @@ function renderInspector() {
 }
 
 function selectSplit(idx) { state.selectedSplit = idx; state.selectedClip = `stock-${idx}`; state.selectedDarwin = null; state.selectedCaption = null; state.selectedGap = null; renderInspector(); renderAssets(); renderTimeline(); }
-function clearSelection() { state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedCaption = null; state.selectedGap = null; renderInspector(); renderAssets(); renderTimeline(); applyTransforms(); }
+function clearSelection() { state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedCaption = null; state.selCaps = []; state.selectedGap = null; renderInspector(); renderAssets(); renderTimeline(); applyTransforms(); }
 
 function renderClipInspector(insp, key) {
   const isStock = key.startsWith('stock-'), isDHalf = key.startsWith('dhalf-');
@@ -1375,6 +1389,14 @@ async function buildDarwinFilmstrip() {
   }
 }
 function deleteSelected() {
+  if ((state.selCaps || []).length) {
+    const ids = new Set(state.selCaps);
+    setCaps(caps().filter(c => !ids.has(c.id)));
+    const n = ids.size; state.selCaps = []; state.selectedCaption = null;
+    renderInspector(); renderTimeline();
+    toast(`Deleted ${n} caption${n > 1 ? 's' : ''}`, 'success');
+    return;
+  }
   if (state.selectedCaption != null) {
     deleteCaption(state.selectedCaption);
     state.selectedCaption = null;
@@ -1414,9 +1436,53 @@ function setCaps(arr, opts) {
   if (opts && opts.inspector) renderInspector();
   paint();
 }
-function selectCaption(id) {
-  state.selectedCaption = id; state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedGap = null;
+function selectCaption(id, additive) {
+  if (additive) {
+    const s = new Set(state.selCaps || []);
+    if (s.has(id)) s.delete(id); else s.add(id);
+    state.selCaps = Array.from(s);
+  } else {
+    state.selCaps = [id];
+  }
+  state.selectedCaption = state.selCaps.length ? state.selCaps[state.selCaps.length - 1] : null;
+  state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedGap = null;
   renderInspector(); renderAssets(); renderTimeline();
+}
+function copySelection() {
+  const ids = state.selCaps || [];
+  if (!ids.length) { toast('Select caption(s) to copy', 'error'); return; }
+  const items = caps().filter(c => ids.includes(c.id)).sort((a, b) => a.start - b.start).map(c => ({ start: c.start, end: c.end, text: c.text }));
+  state.clipboard = { kind: 'captions', items, base: items.length ? items[0].start : 0 };
+  toast(`Copied ${items.length} caption${items.length > 1 ? 's' : ''}`, 'success');
+}
+function pasteClipboard() {
+  const cb = state.clipboard;
+  if (!cb || cb.kind !== 'captions' || !cb.items.length) { toast('Nothing to paste', 'error'); return; }
+  const at = outNow(), T = total();
+  const added = cb.items.map(it => {
+    const dur = it.end - it.start;
+    let s = Math.max(0, Math.min(T - 0.2, at + (it.start - cb.base)));
+    return { id: newCapId(), start: +s.toFixed(2), end: +Math.min(T, s + dur).toFixed(2), text: it.text };
+  });
+  setCaps(caps().concat(added));
+  state.selCaps = added.map(a => a.id); state.selectedCaption = state.selCaps[state.selCaps.length - 1];
+  renderInspector(); renderTimeline();
+  toast(`Pasted ${added.length} caption${added.length > 1 ? 's' : ''} at the playhead`, 'success');
+}
+function duplicateSelection() {
+  const ids = state.selCaps || [];
+  if (!ids.length) { toast('Select caption(s) to duplicate', 'error'); return; }
+  const items = caps().filter(c => ids.includes(c.id)).sort((a, b) => a.start - b.start);
+  const T = total();
+  const added = items.map(it => {
+    const dur = it.end - it.start;
+    const s = Math.min(T - 0.2, it.end);
+    return { id: newCapId(), start: +s.toFixed(2), end: +Math.min(T, s + dur).toFixed(2), text: it.text };
+  });
+  setCaps(caps().concat(added));
+  state.selCaps = added.map(a => a.id); state.selectedCaption = state.selCaps[state.selCaps.length - 1];
+  renderInspector(); renderTimeline();
+  toast(`Duplicated ${added.length} caption${added.length > 1 ? 's' : ''}`, 'success');
 }
 function setCaptionText(id, text) {
   const clean = (text || '').replace(/\s*[\u2013\u2014]\s*/g, ', ').replace(/\r?\n/g, ' ');
@@ -1476,7 +1542,7 @@ function renderTimeline() {
   // caption track: independent blocks (captionsV2), positioned in output time
   const capBlocks = caps().map((c) => {
     const left = c.start * state.pxPerSec, w = Math.max(6, (c.end - c.start) * state.pxPerSec);
-    const selc = state.selectedCaption === c.id ? 'selected' : '';
+    const selc = (state.selCaps || []).includes(c.id) ? 'selected' : '';
     return `<div class="tl-block cap ${selc}" style="left:${left}px;width:${w}px" data-cid="${c.id}" title="${escapeHtml(c.text || '')}"><div class="tl-cap-edge l" data-cid="${c.id}" data-edge="l"></div><div class="tl-cap-edge r" data-cid="${c.id}" data-edge="r"></div>${w > 40 ? escapeHtml(c.text || '') : ''}</div>`;
   }).join('');
 
@@ -1490,7 +1556,7 @@ function renderTimeline() {
     <div class="tl-playhead" id="tlPlayhead" style="left:${x(0)}px"></div>
     <div class="tl-playhead-grip" id="tlGrip" style="left:${x(0)}px"></div>`;
 
-  $('tlHint').textContent = 'click any clip to select (Darwin lives on the Narration track); Cut splits the selection at the playhead; Delete leaves a gap; Esc or empty-click deselects';
+  $('tlHint').textContent = 'click a clip to select; Cmd/Ctrl+click captions for multi-select; Copy Cmd+C, Paste Cmd+V, Duplicate Cmd+D; Cut splits the selection at the playhead; Delete; Esc or empty-click deselects';
 
   // seek by clicking ruler
   const ruler = $('tlRuler');
@@ -1537,25 +1603,35 @@ function renderTimeline() {
     const id = blk.dataset.cid;
     const cap = caps().find(c => c.id === id);
     if (!cap) return;
-    blk.onclick = (e) => { if (blk.dataset.dragged === '1') { blk.dataset.dragged = '0'; return; } selectCaption(id); };
+    blk.onclick = (e) => { if (blk.dataset.dragged === '1') { blk.dataset.dragged = '0'; return; } selectCaption(id, e.shiftKey || e.metaKey || e.ctrlKey); };
     const startDrag = (mode) => (e) => {
       if (e.button !== 0) return;
       e.preventDefault(); e.stopPropagation();
       const px = state.pxPerSec, T = total();
-      const x0 = e.clientX, s0 = cap.start, e0 = cap.end, dur = e0 - s0;
-      let moved = false, ns = s0, ne = e0;
+      const multi = (mode === 'move' && (state.selCaps || []).includes(id) && state.selCaps.length > 1);
+      const group = multi
+        ? state.selCaps.map(cid => { const cc = caps().find(x => x.id === cid); return cc ? { id: cid, s0: cc.start, e0: cc.end, el: inner.querySelector(`.tl-block.cap[data-cid="${cid}"]`) } : null; }).filter(Boolean)
+        : [{ id, s0: cap.start, e0: cap.end, el: blk }];
+      const x0 = e.clientX;
+      let moved = false;
       const onMove = (ev) => {
         const dt = (ev.clientX - x0) / px;
         if (Math.abs(ev.clientX - x0) > 3) { moved = true; blk.dataset.dragged = '1'; }
-        if (mode === 'move') { ns = Math.max(0, Math.min(T - dur, s0 + dt)); ne = ns + dur; }
-        else if (mode === 'l') { ns = Math.max(0, Math.min(e0 - 0.2, s0 + dt)); ne = e0; }
-        else { ne = Math.min(T, Math.max(s0 + 0.2, e0 + dt)); ns = s0; }
-        blk.style.left = (ns * px) + 'px';
-        blk.style.width = Math.max(6, (ne - ns) * px) + 'px';
+        group.forEach(g => {
+          const dur = g.e0 - g.s0; let ns, ne;
+          if (mode === 'move') { ns = Math.max(0, Math.min(T - dur, g.s0 + dt)); ne = ns + dur; }
+          else if (mode === 'l') { ns = Math.max(0, Math.min(g.e0 - 0.2, g.s0 + dt)); ne = g.e0; }
+          else { ne = Math.min(T, Math.max(g.s0 + 0.2, g.e0 + dt)); ns = g.s0; }
+          g.ns = ns; g.ne = ne;
+          if (g.el) { g.el.style.left = (ns * px) + 'px'; g.el.style.width = Math.max(6, (ne - ns) * px) + 'px'; }
+        });
       };
       const onUp = () => {
         document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
-        if (moved) setCaps(caps().map(c => c.id === id ? Object.assign({}, c, { start: +ns.toFixed(2), end: +ne.toFixed(2) }) : c));
+        if (moved) {
+          const map = {}; group.forEach(g => { map[g.id] = { start: +g.ns.toFixed(2), end: +g.ne.toFixed(2) }; });
+          setCaps(caps().map(c => map[c.id] ? Object.assign({}, c, map[c.id]) : c));
+        }
       };
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
     };
@@ -1588,8 +1664,19 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Delete' && e.key !== 'Backspace') return;
   const tag = (e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
-  if (state.selectedSplit == null && !state.selectedDarwin && state.selectedCaption == null && !state.selectedGap) return;
+  if (state.selectedSplit == null && !state.selectedDarwin && state.selectedCaption == null && !(state.selCaps || []).length && !state.selectedGap) return;
   e.preventDefault(); deleteSelected();
+});
+document.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey)) return;
+  const k = e.key.toLowerCase();
+  if (k !== 'c' && k !== 'v' && k !== 'd') return;
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
+  e.preventDefault();
+  if (k === 'c') copySelection();
+  else if (k === 'v') pasteClipboard();
+  else duplicateSelection();
 });
 document.addEventListener('keydown', (e) => {
   if (!(e.metaKey || e.ctrlKey)) return;
