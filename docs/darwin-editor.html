@@ -470,7 +470,7 @@ function closeGapAt(start, end) {
 }
 function selectGap(start, end) {
   state.selectedGap = { start, end }; state.selectedDarwin = null; state.selectedClip = null; state.selectedSplit = null; state.selectedCaption = null;
-  renderInspector(); renderAssets(); renderTimeline(); seek(start);
+  renderInspector(); renderAssets(); renderTimeline();
 }
 // Editor-only: split full-Darwin blocks at darwinCuts (source-time boundaries) so
 // each piece is independently selectable/deletable. The renderer ignores cuts; it
@@ -825,7 +825,7 @@ function renderInspector() {
   }
 }
 
-function selectSplit(idx) { state.selectedSplit = idx; state.selectedClip = `stock-${idx}`; state.selectedDarwin = null; state.selectedCaption = null; state.selectedGap = null; renderInspector(); renderAssets(); renderTimeline(); const seg = state.segments.find(s => s.stockIndex === idx); if (seg) seek(seg.start); }
+function selectSplit(idx) { state.selectedSplit = idx; state.selectedClip = `stock-${idx}`; state.selectedDarwin = null; state.selectedCaption = null; state.selectedGap = null; renderInspector(); renderAssets(); renderTimeline(); }
 function clearSelection() { state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedCaption = null; state.selectedGap = null; renderInspector(); renderAssets(); renderTimeline(); applyTransforms(); }
 
 function renderClipInspector(insp, key) {
@@ -1348,7 +1348,7 @@ function deleteSelected() {
 }
 function selectDarwinSeg(start, end) {
   state.selectedDarwin = { start, end }; state.selectedClip = 'dfull'; state.selectedSplit = null; state.selectedCaption = null; state.selectedGap = null;
-  renderInspector(); renderAssets(); renderTimeline(); seek(start); applyTransforms();
+  renderInspector(); renderAssets(); renderTimeline(); applyTransforms();
 }
 
 // ── Caption track (independent blocks, like Clipchamp) ───────────────────────
@@ -1367,7 +1367,6 @@ function setCaps(arr, opts) {
 function selectCaption(id) {
   state.selectedCaption = id; state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedGap = null;
   renderInspector(); renderAssets(); renderTimeline();
-  const c = caps().find(x => x.id === id); if (c) seek(c.start);
 }
 function setCaptionText(id, text) {
   const clean = (text || '').replace(/\s*[\u2013\u2014]\s*/g, ', ').replace(/\r?\n/g, ' ');
@@ -1398,19 +1397,12 @@ function renderTimeline() {
   for (let s = 0; s <= T; s += step) ticks += `<div class="tl-tick" style="left:${x(s)}px">${fmtTime(s)}</div>`;
 
   // video lane blocks
-  const vBlocks = state.segments.map(seg => {
+  const vBlocks = state.segments.filter(seg => seg.stockIndex != null && !seg.isGap && seg.layout !== 'gap').map(seg => {
     const left = seg.start * state.pxPerSec, w = (seg.end - seg.start) * state.pxPerSec;
-    if (seg.isGap || seg.layout === 'gap') {
-      const selg = state.selectedGap && Math.abs(state.selectedGap.start - seg.start) < 0.05 ? 'selected' : '';
-      return `<div class="tl-block gap ${selg}" style="left:${left}px;width:${Math.max(2,w)}px" onclick="selectGap(${seg.start},${seg.end})" title="black gap"><span class="gap-x" onclick="event.stopPropagation();closeGapAt(${seg.start},${seg.end})" title="close gap">\u00d7</span>${w > 44 ? 'gap' : ''}</div>`;
-    }
-    const isSplit = seg.stockIndex != null;
-    const selD = state.selectedDarwin && Math.abs(state.selectedDarwin.start - seg.start) < 0.05 && Math.abs(state.selectedDarwin.end - seg.end) < 0.05;
-    const sel = isSplit ? ((seg.stockIndex === state.selectedSplit) ? 'selected' : '') : (selD ? 'selected' : '');
-    const click = isSplit ? `onclick="selectSplit(${seg.stockIndex})"` : `onclick="selectDarwinSeg(${seg.start},${seg.end})"`;
-    const label = seg.layout === 'full-darwin' ? 'Darwin' : `${seg.layout.replace('-', ' ')} \u00b7 clip ${seg.stockIndex + 1}`;
-    const edges = isSplit ? `<div class="tl-edge l" data-stock="${seg.stockIndex}" data-edge="l"></div><div class="tl-edge r" data-stock="${seg.stockIndex}" data-edge="r"></div>` : '';
-    return `<div class="tl-block ${seg.layout} ${sel}" style="left:${left}px;width:${Math.max(2,w)}px" ${click} title="${label}">${edges}${w > 60 ? label : ''}</div>`;
+    const sel = (seg.stockIndex === state.selectedSplit) ? 'selected' : '';
+    const label = `${seg.layout.replace('-', ' ')} \u00b7 clip ${seg.stockIndex + 1}`;
+    const edges = `<div class="tl-edge l" data-stock="${seg.stockIndex}" data-edge="l"></div><div class="tl-edge r" data-stock="${seg.stockIndex}" data-edge="r"></div>`;
+    return `<div class="tl-block ${seg.layout} ${sel}" style="left:${left}px;width:${Math.max(2,w)}px" onclick="selectSplit(${seg.stockIndex})" title="${label}">${edges}${w > 60 ? label : ''}</div>`;
   }).join('');
 
   const hasDarwin = state.darwinUrl || p().darwinS3Key;
@@ -1435,7 +1427,7 @@ function renderTimeline() {
   inner.style.width = (W + 20) + 'px';
   inner.innerHTML = `
     <div class="tl-ruler" id="tlRuler">${ticks}</div>
-    <div class="tl-row"><div class="tl-rowlabel">Video</div><div class="tl-lane">${vBlocks}</div></div>
+    <div class="tl-row"><div class="tl-rowlabel">Stock</div><div class="tl-lane">${vBlocks || '<div class="insp-meta" style="padding-left:8px;align-self:center">no overlays</div>'}</div></div>
     <div class="tl-row"><div class="tl-rowlabel">Captions</div><div class="tl-lane">${capBlocks || '<div class="insp-meta" style="padding-left:8px;align-self:center">none</div>'}</div></div>
     <div class="tl-row"><div class="tl-rowlabel">Darwin</div><div class="tl-lane">${narrBlock}</div></div>
     <div class="tl-row"><div class="tl-rowlabel">Music</div><div class="tl-lane">${musicBlock || '<div class="insp-meta" style="padding-left:8px;align-self:center">none</div>'}</div></div>
