@@ -121,7 +121,7 @@
   .tl-block.darwin-top { background: rgba(124,58,237,0.32); border: 1px solid #7C3AED; }
   .tl-block.full-stock { background: rgba(10,124,107,0.4); border: 1px solid #0A7C6B; }
   .tl-block.selected { box-shadow: 0 0 0 2px #fff inset; }
-  .tl-block.narr { background: rgba(1,131,255,0.16); border: 1px solid #2a557f; color: #66B0FF; top: 8px; bottom: 8px; }
+  .tl-block.narr { background: rgba(1,131,255,0.16); border: 1px solid #2a557f; color: #66B0FF; top: 8px; bottom: 8px;  cursor: pointer; }
   .tl-block.music { background: rgba(247,181,56,0.16); border: 1px solid #6b5520; color: #F7B538; top: 10px; bottom: 10px; }
   .tl-block.cap { background: rgba(148,163,184,0.18); border: 1px solid #5b6675; color: #cbd5e1; top: 9px; bottom: 9px; cursor: grab; }
   .tl-block.gap { background: repeating-linear-gradient(45deg, #14181f, #14181f 6px, #1b212b 6px, #1b212b 12px); border: 1px dashed #4b5563; color: #9aa6b5; }
@@ -1279,22 +1279,50 @@ function cutDarwinRange(outStart, outEnd) {
   const cuts = (p().darwinCuts || []).filter(c => c <= a + 0.05 || c >= b - 0.05);
   patch({ darwinClips: full ? [] : clips, darwinCuts: cuts });
 }
+function addDarwinCut(t) {
+  const srcT = outToSrc(t);
+  const cuts = (p().darwinCuts || []).slice();
+  if (cuts.some(c => Math.abs(c - srcT) < 0.15)) { toast('Already a cut near here', 'error'); return; }
+  cuts.push(+srcT.toFixed(2)); cuts.sort((a, b) => a - b);
+  patch({ darwinCuts: cuts });
+  rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); paint();
+  toast('Darwin cut added', 'success');
+}
+function splitCaptionAt(id, t) {
+  const c = caps().find(x => x.id === id); if (!c) return;
+  if (t <= c.start + 0.1 || t >= c.end - 0.1) { toast('Move the playhead inside the caption to cut it', 'error'); return; }
+  const a = Object.assign({}, c, { end: +t.toFixed(2) });
+  const bb = { id: newCapId(), start: +t.toFixed(2), end: c.end, text: c.text };
+  setCaps(caps().filter(x => x.id !== id).concat([a, bb]));
+  toast('Caption cut', 'success');
+}
 function cutAtPlayhead() {
   const t = outNow();
+  // Universal cut: act on whatever is selected, else the video clip under the playhead.
+  if (state.selectedCaption) { splitCaptionAt(state.selectedCaption, t); return; }
+  if (state.selectedDarwin || state.selectedClip === 'dfull') { addDarwinCut(t); return; }
   const seg = activeSegment(t);
   if (!seg || t <= seg.start + 0.15 || t >= seg.end - 0.15) { toast('Move the playhead inside a clip, then Cut', 'error'); return; }
-  if (seg.stockIndex != null) {
-    splitStockAt(seg.stockIndex, seg.start, t);
-  } else {
-    const srcT = outToSrc(t);
-    const cuts = (p().darwinCuts || []).slice();
-    if (cuts.some(c => Math.abs(c - srcT) < 0.15)) { toast('Already a cut near here', 'error'); return; }
-    cuts.push(+srcT.toFixed(2)); cuts.sort((a, b) => a - b);
-    patch({ darwinCuts: cuts });
-  }
+  if (seg.stockIndex != null) { splitStockAt(seg.stockIndex, seg.start, t); }
+  else { addDarwinCut(t); return; }
   state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedCaption = null; state.selectedGap = null;
   rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); paint();
   toast('Cut added', 'success');
+}
+// The Darwin as one continuous clip track: full [0,total] split by cut points and gaps.
+function darwinPieces() {
+  const T = total();
+  const gaps = (p().darwinGaps || []).map(g => ({ a: srcToOut(g.srcStart), b: srcToOut(g.srcEnd) })).filter(g => g.b > g.a + 0.02);
+  const cutOuts = (p().darwinCuts || []).map(c => srcToOut(c)).filter(o => o > 0.05 && o < T - 0.05);
+  const bounds = [0, T].concat(cutOuts).concat(gaps.reduce((acc, g) => acc.concat([g.a, g.b]), [])).filter(x => x >= 0 && x <= T);
+  const uniq = Array.from(new Set(bounds.map(x => +x.toFixed(3)))).sort((a, b) => a - b);
+  const pieces = [];
+  for (let i = 0; i < uniq.length - 1; i++) {
+    const s = uniq[i], e = uniq[i + 1]; if (e - s < 0.03) continue;
+    const mid = (s + e) / 2;
+    pieces.push({ start: s, end: e, isGap: gaps.some(g => mid > g.a && mid < g.b) });
+  }
+  return pieces;
 }
 function deleteSelected() {
   if (state.selectedCaption != null) {
@@ -1385,7 +1413,16 @@ function renderTimeline() {
     return `<div class="tl-block ${seg.layout} ${sel}" style="left:${left}px;width:${Math.max(2,w)}px" ${click} title="${label}">${edges}${w > 60 ? label : ''}</div>`;
   }).join('');
 
-  const narrBlock = state.darwinUrl || p().darwinS3Key ? `<div class="tl-block narr" style="left:0px;width:${T*state.pxPerSec}px">narration (Darwin)</div>` : '';
+  const hasDarwin = state.darwinUrl || p().darwinS3Key;
+  const narrBlock = hasDarwin ? darwinPieces().map(pc => {
+    const left = pc.start * state.pxPerSec, w = Math.max(4, (pc.end - pc.start) * state.pxPerSec);
+    if (pc.isGap) {
+      const selg = state.selectedGap && Math.abs(state.selectedGap.start - pc.start) < 0.05 ? 'selected' : '';
+      return `<div class="tl-block gap ${selg}" style="left:${left}px;width:${w}px" onclick="selectGap(${pc.start},${pc.end})" title="black gap"><span class="gap-x" onclick="event.stopPropagation();closeGapAt(${pc.start},${pc.end})" title="close gap">\u00d7</span>${w > 44 ? 'gap' : ''}</div>`;
+    }
+    const seld = state.selectedDarwin && Math.abs(state.selectedDarwin.start - pc.start) < 0.05 && Math.abs(state.selectedDarwin.end - pc.end) < 0.05 ? 'selected' : '';
+    return `<div class="tl-block narr ${seld}" style="left:${left}px;width:${w}px" onclick="selectDarwinSeg(${pc.start},${pc.end})" title="Darwin narration">${w > 60 ? 'Darwin' : ''}</div>`;
+  }).join('') : '';
   const musicBlock = p().musicS3Key ? `<div class="tl-block music" style="left:0px;width:${T*state.pxPerSec}px">${escapeHtml(p().musicName||'music')}</div>` : '';
 
   // caption track: independent blocks (captionsV2), positioned in output time
@@ -1400,12 +1437,12 @@ function renderTimeline() {
     <div class="tl-ruler" id="tlRuler">${ticks}</div>
     <div class="tl-row"><div class="tl-rowlabel">Video</div><div class="tl-lane">${vBlocks}</div></div>
     <div class="tl-row"><div class="tl-rowlabel">Captions</div><div class="tl-lane">${capBlocks || '<div class="insp-meta" style="padding-left:8px;align-self:center">none</div>'}</div></div>
-    <div class="tl-row"><div class="tl-rowlabel">Narration</div><div class="tl-lane">${narrBlock}</div></div>
+    <div class="tl-row"><div class="tl-rowlabel">Darwin</div><div class="tl-lane">${narrBlock}</div></div>
     <div class="tl-row"><div class="tl-rowlabel">Music</div><div class="tl-lane">${musicBlock || '<div class="insp-meta" style="padding-left:8px;align-self:center">none</div>'}</div></div>
     <div class="tl-playhead" id="tlPlayhead" style="left:${x(0)}px"></div>
     <div class="tl-playhead-grip" id="tlGrip" style="left:${x(0)}px"></div>`;
 
-  $('tlHint').textContent = 'click any block to select; Cut splits at the playhead, Delete removes the selection (stock clip or Darwin section)';
+  $('tlHint').textContent = 'click any clip to select (Darwin lives on the Narration track); Cut splits the selection at the playhead; Delete leaves a gap; Esc or empty-click deselects';
 
   // seek by clicking ruler
   const ruler = $('tlRuler');
