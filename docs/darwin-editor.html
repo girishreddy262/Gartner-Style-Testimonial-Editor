@@ -308,7 +308,8 @@ const state = {
   darwinUrl: null, stockUrls: [], musicUrl: null,
   segments: [], captions: [],
   selectedSplit: null,        // stockIndex of the selected split, or null
-  selectedClip: null,         // transform target key: stock-{k} | dhalf-{k} | dfull
+  selectedClip: null,
+  darwinFilmstrip: null, _filmUrl: null,         // transform target key: stock-{k} | dhalf-{k} | dfull
   selectedDarwin: null,       // {start,end} (output time) of a selected Darwin block
   selectedCaption: null,      // markerLineIdx of selected caption, or null
   selectedGap: null,          // {start,end} (output time) of a selected black gap
@@ -382,6 +383,7 @@ async function boot() {
     state.project.captionsV2 = seed; state.captions = seed;
     DarwinAPI.update(PROJECT_ID, { captionsV2: seed }).catch(() => {});
   }
+  buildDarwinFilmstrip();
   renderAssets();
   renderTimeline();
   renderInspector();
@@ -1332,6 +1334,46 @@ function darwinPieces() {
   }
   return pieces;
 }
+// Build a thumbnail filmstrip for the Darwin clip from a separate crossOrigin video,
+// so the main playback video is never touched. Needs S3 CORS; falls back to a plain block.
+async function buildDarwinFilmstrip() {
+  try {
+    const url = state.darwinUrl; if (!url) return;
+    if (state._filmUrl === url && state.darwinFilmstrip) return;
+    const dur = p().totalDuration || 0; if (dur < 0.2) return;
+    const v = document.createElement('video');
+    v.crossOrigin = 'anonymous'; v.muted = true; v.preload = 'auto'; v.src = url;
+    await new Promise((res, rej) => {
+      const to = setTimeout(() => rej(new Error('meta timeout')), 8000);
+      v.onloadedmetadata = () => { clearTimeout(to); res(); };
+      v.onerror = () => { clearTimeout(to); rej(new Error('load error')); };
+    });
+    const srcTotal = v.duration || dur;
+    const TW = 72, TH = 128;
+    const N = Math.max(6, Math.min(18, Math.round(dur / 2)));
+    const strip = document.createElement('canvas'); strip.width = TW * N; strip.height = TH;
+    const sctx = strip.getContext('2d');
+    const tmp = document.createElement('canvas'); tmp.width = TW; tmp.height = TH;
+    const tctx = tmp.getContext('2d');
+    for (let i = 0; i < N; i++) {
+      const outT = (N === 1) ? 0 : (i / (N - 1)) * dur;
+      const srcT = Math.min(srcTotal - 0.05, Math.max(0, outToSrc(outT)));
+      await new Promise((res) => {
+        let done = false; const to = setTimeout(() => { if (!done) { done = true; res(); } }, 2500);
+        v.onseeked = () => { if (done) return; done = true; clearTimeout(to);
+          try { tctx.drawImage(v, 0, 0, TW, TH); sctx.drawImage(tmp, i * TW, 0); } catch (_) {}
+          res();
+        };
+        try { v.currentTime = srcT; } catch (_) { clearTimeout(to); res(); }
+      });
+    }
+    const dataUrl = strip.toDataURL('image/jpeg', 0.6); // throws if tainted (CORS not set)
+    state.darwinFilmstrip = dataUrl; state._filmUrl = url;
+    renderTimeline();
+  } catch (e) {
+    state.darwinFilmstrip = null; // CORS missing or capture failed -> plain block
+  }
+}
 function deleteSelected() {
   if (state.selectedCaption != null) {
     deleteCaption(state.selectedCaption);
@@ -1425,7 +1467,9 @@ function renderTimeline() {
       return `<div class="tl-block gap ${selg}" style="left:${left}px;width:${w}px" onclick="selectGap(${pc.start},${pc.end})" title="black gap"><span class="gap-x" onclick="event.stopPropagation();closeGapAt(${pc.start},${pc.end})" title="close gap">\u00d7</span>${w > 44 ? 'gap' : ''}</div>`;
     }
     const seld = state.selectedDarwin && Math.abs(state.selectedDarwin.start - pc.start) < 0.05 && Math.abs(state.selectedDarwin.end - pc.end) < 0.05 ? 'selected' : '';
-    return `<div class="tl-block narr ${seld}" style="left:${left}px;width:${w}px" onclick="selectDarwinSeg(${pc.start},${pc.end})" title="Darwin narration">${w > 60 ? 'Darwin' : ''}</div>`;
+    const film = state.darwinFilmstrip;
+    const bg = film ? `background-image:url(${film});background-size:${(total() * state.pxPerSec)}px 100%;background-position:${-(pc.start * state.pxPerSec)}px center;background-repeat:no-repeat;` : '';
+    return `<div class="tl-block narr ${seld}" style="left:${left}px;width:${w}px;${bg}" onclick="selectDarwinSeg(${pc.start},${pc.end})" title="Darwin narration">${(w > 60 && !film) ? 'Darwin' : ''}</div>`;
   }).join('') : '';
   const musicBlock = p().musicS3Key ? `<div class="tl-block music" style="left:0px;width:${T*state.pxPerSec}px">${escapeHtml(p().musicName||'music')}</div>` : '';
 
@@ -1637,7 +1681,7 @@ function moveStock(i, dir) {
   if (j < 0 || j >= keys.length) return;
   [keys[i], keys[j]] = [keys[j], keys[i]]; [names[i], names[j]] = [names[j], names[i]];
   patch({ stockS3Keys: keys, stockNames: names });
-  resolveAssetUrls().then(() => { lastStockIndex = -2; renderAssets(); renderTimeline(); paint(); });
+  resolveAssetUrls().then(() => { lastStockIndex = -2; renderAssets(); renderTimeline(); paint();  state._filmUrl = null; buildDarwinFilmstrip(); });
 }
 function deleteStock(i) {
   const keys = [...(p().stockS3Keys||[])], names = [...(p().stockNames||[])];
