@@ -128,7 +128,8 @@
   .tl-block.gap .gap-x { position: absolute; right: 4px; top: 2px; font-size: 13px; line-height: 1; color: #cbd5e1; cursor: pointer; padding: 0 3px; border-radius: 3px; }
   .tl-block.gap .gap-x:hover { background: rgba(255,255,255,0.18); color: #fff; }
   .tl-block.cap.selected { box-shadow: 0 0 0 2px #fff inset; }
-  .tl-cap-edge { position: absolute; top: 0; bottom: 0; left: 0; width: 8px; cursor: ew-resize; z-index: 3; }
+  .tl-cap-edge { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 3; }
+  .tl-cap-edge.l { left: 0; } .tl-cap-edge.r { right: 0; }
   .tl-block.cap:hover .tl-cap-edge { background: rgba(255,255,255,0.35); }
   .tl-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #FC6A6B; z-index: 8; pointer-events: none; box-shadow: 0 0 6px rgba(252,106,107,0.6); }
   .tl-playhead-grip { position: absolute; top: 0; width: 11px; height: 22px; margin-left: -5px; background: transparent; cursor: ew-resize; z-index: 9; }
@@ -186,7 +187,6 @@
           <div class="sub" id="darwinSub"></div>
           <div class="asset-actions">
             <button class="btn sm" id="swapDarwin">Swap video</button>
-            <button class="btn sm" id="trimDarwinBtn">Cut / trim</button>
           </div>
         </div>
         <input type="file" id="fDarwin" accept="video/*" class="hidden" />
@@ -375,6 +375,12 @@ async function boot() {
 
   await resolveAssetUrls();
   rebuildSegments();
+  if (!Array.isArray(p().captionsV2)) {
+    const seed = (state.captions || []).filter(c => c.text && String(c.text).trim())
+      .map(c => ({ id: newCapId(), start: +(+c.start).toFixed(2), end: +(+c.end).toFixed(2), text: c.text }));
+    state.project.captionsV2 = seed; state.captions = seed;
+    DarwinAPI.update(PROJECT_ID, { captionsV2: seed }).catch(() => {});
+  }
   renderAssets();
   renderTimeline();
   renderInspector();
@@ -384,7 +390,6 @@ async function boot() {
   wireTrimPopup();
   wireCaptionDrag();
   { const ab = $('alignBtn'); if (ab) ab.onclick = alignToAudio; }
-  { const tb = $('trimDarwinBtn'); if (tb) tb.onclick = openDarwinTrim; }
   // Backfill duration if missing, once the darwin video reports metadata.
   maybeBackfillDuration();
   paint(); // draw frame 0 (sets edge visibility, time readout, playhead) before first play
@@ -422,7 +427,7 @@ function rebuildSegments() {
     state.outputDuration = srcTotal || (segs[segs.length - 1]?.end || 0);
   }
   state.segments = subdivideGaps(subdivideDarwin(segs));
-  state.captions = caps;
+  state.captions = Array.isArray(p().captionsV2) ? p().captionsV2 : caps;
   state.stockClipsNeeded = parsed.stockClipsNeeded;
 }
 // Editor-only: a darwinGap is a kept source range shown as a black, silent beat
@@ -734,19 +739,18 @@ function renderInspector() {
   const insp = $('inspector');
   if (state.selectedClip) { renderClipInspector(insp, state.selectedClip); return; }
   if (state.selectedCaption != null) {
-    const cue = getCaptionCues().find(c => c.markerLineIdx === state.selectedCaption);
+    const cue = caps().find(c => c.id === state.selectedCaption);
     const txt = cue ? cue.text : '';
-    const startO = cue ? srcToOut(cue.srcT) : 0;
     insp.innerHTML = `
       <div class="insp-sec">
         <div class="insp-h">Caption</div>
-        <div class="insp-meta">starts ${fmtTime(startO)} \u00b7 drag the block on the Captions track to retime</div>
+        <div class="insp-meta">${cue ? `${fmtTime(cue.start)} \u2013 ${fmtTime(cue.end)}` : ''} \u00b7 drag the block anywhere on the Captions track, drag its edges to trim</div>
         <textarea id="capEdit" class="script" style="height:60px;margin-top:8px" spellcheck="false" placeholder="on-screen caption text">${escapeHtml(txt)}</textarea>
         <button class="btn sm" id="capDelBtn" style="width:100%;margin-top:8px">Delete this caption</button>
-        <div class="insp-meta" style="margin-top:6px">Clamps to 2 lines on screen. Keep it short. Add a new caption with the + Caption button on the timeline.</div>
+        <div class="insp-meta" style="margin-top:6px">Clamps to 2 lines on screen. Add a new one with + Caption on the timeline.</div>
       </div>`;
     const ce = $('capEdit');
-    if (ce) ce.oninput = () => { setCaptionText(state.selectedCaption, ce.value); rebuildSegments(); renderTimeline(); paint(); };
+    if (ce) ce.oninput = () => setCaptionText(state.selectedCaption, ce.value);
     const cd = $('capDelBtn'); if (cd) cd.onclick = deleteSelected;
     return;
   }
@@ -841,10 +845,9 @@ function renderClipInspector(insp, key) {
       <div class="insp-meta" id="txTrimMeta" style="margin-top:6px">${(t.trimIn || t.trimOut) ? `in ${fmtTime(t.trimIn)}${t.trimOut ? ' \u2013 out ' + fmtTime(t.trimOut) : ''}` : 'full clip'}</div>` : '';
   const isDarwin = !isStock;
   const darwinRow = isDarwin ? `
-      <div class="insp-h">Trim &amp; cut (Darwin)</div>
-      <button class="btn sm" id="dwTrimBtn" style="width:100%">Trim Darwin start / end</button>
-      ${state.selectedDarwin ? `<button class="btn sm" id="dwDelBtn" style="width:100%;margin-top:8px">Delete this section</button>` : ''}
-      <div class="insp-meta" style="margin-top:6px">Cut on the timeline splits the Darwin at the playhead. Delete leaves a black gap; click the gap's \u00d7 (or its Close button) to pull the rest left and shorten the reel.</div>` : '';
+      <div class="insp-h">Cut &amp; delete (Darwin)</div>
+      ${state.selectedDarwin ? `<button class="btn sm" id="dwDelBtn" style="width:100%">Delete this section</button>` : ''}
+      <div class="insp-meta" style="margin-top:6px">To remove a pause: park the playhead, press Cut to split, select the piece, Delete leaves a black gap, then click the gap's \u00d7 to close it and pull the rest left.</div>` : '';
   const capInfo = (idx != null) ? splitCaptionLine(idx) : null;
   const capEditor = (idx != null) ? `
       <div class="insp-h">Caption</div>
@@ -874,7 +877,6 @@ function renderClipInspector(insp, key) {
   bind('txX', e => { setClipTx(key, { x: +e.target.value }); $('txXVal').textContent = e.target.value + '%'; applyTransforms(); });
   bind('txY', e => { setClipTx(key, { y: +e.target.value }); $('txYVal').textContent = e.target.value + '%'; applyTransforms(); });
   const tb = $('txTrimBtn'); if (tb) tb.onclick = () => openTrimPopup(idx);
-  const dtb = $('dwTrimBtn'); if (dtb) dtb.onclick = openDarwinTrim;
   const ddb = $('dwDelBtn'); if (ddb) ddb.onclick = deleteSelected;
   const ce = $('txCap'); if (ce) ce.oninput = () => setSplitCaption(idx, ce.value);
 }
@@ -1321,80 +1323,39 @@ function selectDarwinSeg(start, end) {
   renderInspector(); renderAssets(); renderTimeline(); seek(start); applyTransforms();
 }
 
-// ── Caption track ─────────────────────────────────────────────────────────────
-// Each [MM:SS] cue carries a caption (inline after the marker, or the next text
-// line). The track lets you retime a caption (moves its cue's [MM:SS]) and edit
-// its text. Both are plain script edits, so the renderer needs no changes.
-function getCaptionCues() {
-  const lines = scriptLines(), cues = [];
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^\s*\[(\d+):(\d+)\]/);
-    if (!m) continue;
-    const srcT = (+m[1]) * 60 + (+m[2]);
-    let capLineIdx = i, inline = true;
-    let cap = lines[i].replace(/^\s*\[\d+:\d+\]\s*/, '').replace(/\/split\s+\w+/ig, '').trim();
-    if (!cap) {
-      inline = false;
-      for (let j = i + 1; j < lines.length; j++) { const t = lines[j].trim(); if (!t) continue; if (/^\[\d+:\d+\]/.test(t)) break; cap = t; capLineIdx = j; break; }
-    }
-    cues.push({ markerLineIdx: i, capLineIdx, inline, text: cap, srcT });
-  }
-  return cues;
+// ── Caption track (independent blocks, like Clipchamp) ───────────────────────
+// Captions live in project.captionsV2 as {id,start,end,text} in output time,
+// fully independent of the script cues: drag anywhere, resize edges, add, delete.
+function caps() { return Array.isArray(p().captionsV2) ? p().captionsV2 : []; }
+function newCapId() { return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
+function setCaps(arr, opts) {
+  arr = arr.slice().filter(c => c.end > c.start + 0.05).sort((a, b) => a.start - b.start);
+  patch({ captionsV2: arr });
+  state.captions = arr;
+  renderTimeline();
+  if (opts && opts.inspector) renderInspector();
+  paint();
 }
-function setCaptionText(markerLineIdx, text) {
-  const lines = scriptLines();
-  const cues = getCaptionCues();
-  const cue = cues.find(c => c.markerLineIdx === markerLineIdx);
-  if (!cue) return;
-  const clean = (text || '').replace(/\s*[\u2013\u2014]\s*/g, ', ').replace(/\r?\n/g, ' ').trim();
-  if (cue.inline) {
-    const m = lines[markerLineIdx].match(/^(\s*\[\d+:\d+\]\s*)(\/split\s+\w+\s*)?/i);
-    const prefix = m ? m[0] : (lines[markerLineIdx].match(/^\s*\[\d+:\d+\]\s*/) || [''])[0];
-    lines[markerLineIdx] = prefix + clean;
-  } else if (cue.capLineIdx !== cue.markerLineIdx) {
-    lines[cue.capLineIdx] = clean;
-  } else {
-    lines.splice(markerLineIdx + 1, 0, clean);
-  }
-  const s = lines.join('\n'); patch({ scriptText: s }); const sb = $('scriptText'); if (sb) sb.value = s;
-}
-function selectCaption(markerLineIdx) {
-  state.selectedCaption = markerLineIdx; state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedGap = null;
+function selectCaption(id) {
+  state.selectedCaption = id; state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedGap = null;
   renderInspector(); renderAssets(); renderTimeline();
-  const cue = getCaptionCues().find(c => c.markerLineIdx === markerLineIdx);
-  if (cue) seek(srcToOut(cue.srcT));
+  const c = caps().find(x => x.id === id); if (c) seek(c.start);
+}
+function setCaptionText(id, text) {
+  const clean = (text || '').replace(/\s*[\u2013\u2014]\s*/g, ', ').replace(/\r?\n/g, ' ');
+  setCaps(caps().map(c => c.id === id ? Object.assign({}, c, { text: clean }) : c));
 }
 function addCaptionAtPlayhead() {
-  const srcT = outToSrc(outNow());
-  const lines = scriptLines(), markers = getMarkers();
-  const near = markers.find(m => Math.abs(m.t - srcT) < 0.2);
-  if (near) { selectCaption(near.lineIdx); toast('A cue already exists here, selected it', 'success'); return; }
-  let nextLine = lines.length;
-  for (const m of markers) { if (m.t > srcT + 1e-6) { nextLine = m.lineIdx; break; } }
-  lines.splice(nextLine, 0, tsOf(srcT), 'New caption');
-  const s = lines.join('\n'); patch({ scriptText: s }); const sb = $('scriptText'); if (sb) sb.value = s;
-  rebuildSegments(); renderTimeline();
-  selectCaption(nextLine);
+  const start = +outNow().toFixed(2);
+  const after = caps().filter(c => c.start > start + 0.05).sort((a, b) => a.start - b.start)[0];
+  const end = +Math.min(start + 2, after ? after.start : total(), total()).toFixed(2);
+  if (end <= start + 0.1) { toast('Not enough room here for a caption', 'error'); return; }
+  const c = { id: newCapId(), start, end, text: 'New caption' };
+  setCaps(caps().concat([c]));
+  selectCaption(c.id);
   toast('Caption added, edit the text on the right', 'success');
 }
-function deleteCaption(markerLineIdx) {
-  const lines = scriptLines();
-  const cue = getCaptionCues().find(c => c.markerLineIdx === markerLineIdx);
-  if (!cue) return;
-  const hasSplit = /\/split\s+\w+/i.test(lines[markerLineIdx]);
-  if (hasSplit) {
-    // keep the split + its timing, only clear the caption text
-    if (cue.inline) lines[markerLineIdx] = lines[markerLineIdx].replace(/^(\s*\[\d+:\d+\]\s*\/split\s+\w+).*/i, '$1');
-    else if (cue.capLineIdx !== markerLineIdx) lines.splice(cue.capLineIdx, 1);
-  } else {
-    // plain caption cue: remove caption line + the cue marker line
-    const rm = [];
-    if (cue.capLineIdx !== markerLineIdx) rm.push(cue.capLineIdx);
-    rm.push(markerLineIdx);
-    rm.sort((a, b) => b - a).forEach(i => lines.splice(i, 1));
-  }
-  const s = lines.join('\n'); patch({ scriptText: s }); const sb = $('scriptText'); if (sb) sb.value = s;
-}
+function deleteCaption(id) { setCaps(caps().filter(c => c.id !== id)); }
 
 function renderTimeline() {
   const inner = $('tlInner');
@@ -1427,17 +1388,11 @@ function renderTimeline() {
   const narrBlock = state.darwinUrl || p().darwinS3Key ? `<div class="tl-block narr" style="left:0px;width:${T*state.pxPerSec}px">narration (Darwin)</div>` : '';
   const musicBlock = p().musicS3Key ? `<div class="tl-block music" style="left:0px;width:${T*state.pxPerSec}px">${escapeHtml(p().musicName||'music')}</div>` : '';
 
-  // caption track: one block per caption cue, positioned in output time
-  const capCues = getCaptionCues();
-  const capBlocks = capCues.map((c, i) => {
-    if (!c.text) return '';
-    const startO = srcToOut(c.srcT);
-    const nextT = i + 1 < capCues.length ? capCues[i + 1].srcT : (p().totalDuration || 0);
-    const endO = srcToOut(nextT);
-    if (endO - startO < 0.05) return '';
-    const left = startO * state.pxPerSec, w = (endO - startO) * state.pxPerSec;
-    const selc = state.selectedCaption === c.markerLineIdx ? 'selected' : '';
-    return `<div class="tl-block cap ${selc}" style="left:${left}px;width:${Math.max(2,w)}px" data-cap="${c.markerLineIdx}" title="${escapeHtml(c.text)}"><div class="tl-cap-edge" data-cap="${c.markerLineIdx}"></div>${w > 40 ? escapeHtml(c.text) : ''}</div>`;
+  // caption track: independent blocks (captionsV2), positioned in output time
+  const capBlocks = caps().map((c) => {
+    const left = c.start * state.pxPerSec, w = Math.max(6, (c.end - c.start) * state.pxPerSec);
+    const selc = state.selectedCaption === c.id ? 'selected' : '';
+    return `<div class="tl-block cap ${selc}" style="left:${left}px;width:${w}px" data-cid="${c.id}" title="${escapeHtml(c.text || '')}"><div class="tl-cap-edge l" data-cid="${c.id}" data-edge="l"></div><div class="tl-cap-edge r" data-cid="${c.id}" data-edge="r"></div>${w > 40 ? escapeHtml(c.text || '') : ''}</div>`;
   }).join('');
 
   inner.style.width = (W + 20) + 'px';
@@ -1490,31 +1445,44 @@ function renderTimeline() {
   });
   movePlayhead(outNow());
 
-  // caption blocks: click to select/edit, drag to retime (moves the cue [MM:SS])
+  // caption blocks: click selects, drag the body to move anywhere, drag edges to trim.
+  // The block moves live (no re-render mid-drag); we commit to captionsV2 on release.
+  const LBLc = 78;
   inner.querySelectorAll('.tl-block.cap').forEach(blk => {
-    const lineIdx = +blk.dataset.cap;
-    blk.onclick = (e) => { if (blk.dataset.dragged === '1') { blk.dataset.dragged = '0'; return; } selectCaption(lineIdx); };
-    blk.onmousedown = (e) => {
+    const id = blk.dataset.cid;
+    const cap = caps().find(c => c.id === id);
+    if (!cap) return;
+    blk.onclick = (e) => { if (blk.dataset.dragged === '1') { blk.dataset.dragged = '0'; return; } selectCaption(id); };
+    const startDrag = (mode) => (e) => {
       if (e.button !== 0) return;
-      e.preventDefault();
-      const markers = getMarkers();
-      let mi = markers.findIndex(m => m.lineIdx === lineIdx);
-      if (mi < 0) return;
-      const lo = mi > 0 ? markers[mi - 1].t + 0.3 : 0;
-      const hi = mi < markers.length - 1 ? markers[mi + 1].t - 0.3 : (p().totalDuration || total());
-      const rulerRect = $('tlRuler').getBoundingClientRect();
-      let moved = false;
+      e.preventDefault(); e.stopPropagation();
+      const px = state.pxPerSec, T = total();
+      const x0 = e.clientX, s0 = cap.start, e0 = cap.end, dur = e0 - s0;
+      let moved = false, ns = s0, ne = e0;
       const onMove = (ev) => {
-        moved = true; blk.dataset.dragged = '1';
-        let srcT = ($('tlScroll').scrollLeft + ev.clientX - rulerRect.left - 78) / state.pxPerSec; // output time
-        srcT = outToSrc(srcT);
-        srcT = Math.max(lo, Math.min(hi, srcT));
-        setMarkerTime(lineIdx, srcT);
-        rebuildSegments(); renderTimeline(); paint();
+        const dt = (ev.clientX - x0) / px;
+        if (Math.abs(ev.clientX - x0) > 3) { moved = true; blk.dataset.dragged = '1'; }
+        if (mode === 'move') { ns = Math.max(0, Math.min(T - dur, s0 + dt)); ne = ns + dur; }
+        else if (mode === 'l') { ns = Math.max(0, Math.min(e0 - 0.2, s0 + dt)); ne = e0; }
+        else { ne = Math.min(T, Math.max(s0 + 0.2, e0 + dt)); ns = s0; }
+        blk.style.left = (ns * px) + 'px';
+        blk.style.width = Math.max(6, (ne - ns) * px) + 'px';
       };
-      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); if (!moved) blk.dataset.dragged = '0'; };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+        if (moved) setCaps(caps().map(c => c.id === id ? Object.assign({}, c, { start: +ns.toFixed(2), end: +ne.toFixed(2) }) : c));
+      };
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
     };
+    blk.onmousedown = startDrag('move');
+    const le = blk.querySelector('.tl-cap-edge.l'), re = blk.querySelector('.tl-cap-edge.r');
+    if (le) le.onmousedown = startDrag('l');
+    if (re) re.onmousedown = startDrag('r');
+  });
+
+  // click empty timeline space to deselect
+  inner.querySelectorAll('.tl-lane').forEach(lane => {
+    lane.onclick = (e) => { if (e.target === lane) clearSelection(); };
   });
 }
 function movePlayhead(t) {
@@ -1531,6 +1499,7 @@ $('redoBtn').onclick = () => doRedo();
 { const d = $('delBtn'); if (d) d.onclick = deleteSelected; }
 { const a = $('addCapBtn'); if (a) a.onclick = addCaptionAtPlayhead; }
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { clearSelection(); return; }
   if (e.key !== 'Delete' && e.key !== 'Backspace') return;
   const tag = (e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
