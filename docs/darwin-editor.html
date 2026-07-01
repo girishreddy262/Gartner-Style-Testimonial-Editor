@@ -124,6 +124,9 @@
   .tl-block.narr { background: rgba(1,131,255,0.16); border: 1px solid #2a557f; color: #66B0FF; top: 8px; bottom: 8px; }
   .tl-block.music { background: rgba(247,181,56,0.16); border: 1px solid #6b5520; color: #F7B538; top: 10px; bottom: 10px; }
   .tl-block.cap { background: rgba(148,163,184,0.18); border: 1px solid #5b6675; color: #cbd5e1; top: 9px; bottom: 9px; cursor: grab; }
+  .tl-block.gap { background: repeating-linear-gradient(45deg, #14181f, #14181f 6px, #1b212b 6px, #1b212b 12px); border: 1px dashed #4b5563; color: #9aa6b5; }
+  .tl-block.gap .gap-x { position: absolute; right: 4px; top: 2px; font-size: 13px; line-height: 1; color: #cbd5e1; cursor: pointer; padding: 0 3px; border-radius: 3px; }
+  .tl-block.gap .gap-x:hover { background: rgba(255,255,255,0.18); color: #fff; }
   .tl-block.cap.selected { box-shadow: 0 0 0 2px #fff inset; }
   .tl-cap-edge { position: absolute; top: 0; bottom: 0; left: 0; width: 8px; cursor: ew-resize; z-index: 3; }
   .tl-block.cap:hover .tl-cap-edge { background: rgba(255,255,255,0.35); }
@@ -307,6 +310,7 @@ const state = {
   selectedClip: null,         // transform target key: stock-{k} | dhalf-{k} | dfull
   selectedDarwin: null,       // {start,end} (output time) of a selected Darwin block
   selectedCaption: null,      // markerLineIdx of selected caption, or null
+  selectedGap: null,          // {start,end} (output time) of a selected black gap
   pxPerSec: 56,
   playing: false,
   saveTimer: null,
@@ -417,9 +421,51 @@ function rebuildSegments() {
   } else {
     state.outputDuration = srcTotal || (segs[segs.length - 1]?.end || 0);
   }
-  state.segments = subdivideDarwin(segs);
+  state.segments = subdivideGaps(subdivideDarwin(segs));
   state.captions = caps;
   state.stockClipsNeeded = parsed.stockClipsNeeded;
+}
+// Editor-only: a darwinGap is a kept source range shown as a black, silent beat
+// (time preserved). Closing it ripples the rest left via darwinClips. The
+// renderer learns about gaps in the render-side pass; closed gaps already render
+// correctly because they become darwinClips removals.
+function subdivideGaps(segs) {
+  const gaps = p().darwinGaps || [];
+  if (!gaps.length) return segs;
+  const out = [];
+  for (const s of segs) {
+    if (s.stockIndex != null || s.isGap) { out.push(s); continue; }
+    const srcA = outToSrc(s.start), srcB = outToSrc(s.end);
+    const ov = gaps.map(g => ({ a: Math.max(g.srcStart, srcA), b: Math.min(g.srcEnd, srcB) }))
+                   .filter(g => g.b > g.a + 0.02).sort((x, y) => x.a - y.a);
+    if (!ov.length) { out.push(s); continue; }
+    let cur = srcA;
+    for (const g of ov) {
+      if (g.a > cur + 0.02) out.push({ start: srcToOut(cur), end: srcToOut(g.a), layout: 'full-darwin', stockIndex: null });
+      out.push({ start: srcToOut(g.a), end: srcToOut(g.b), layout: 'gap', stockIndex: null, isGap: true });
+      cur = g.b;
+    }
+    if (srcB > cur + 0.02) out.push({ start: srcToOut(cur), end: srcToOut(srcB), layout: 'full-darwin', stockIndex: null });
+  }
+  return out;
+}
+function closeGap(outStart, outEnd) {
+  const srcTotal = p().totalDuration || 0;
+  const a = outToSrc(outStart), b = outToSrc(outEnd);
+  const clips = subtractRange(p().darwinClips || [], srcTotal, a, b);
+  const full = clips.length === 1 && clips[0].srcStart <= 0.05 && clips[0].srcEnd >= srcTotal - 0.05;
+  const gaps = (p().darwinGaps || []).filter(g => !(g.srcStart >= a - 0.05 && g.srcEnd <= b + 0.05));
+  const cuts = (p().darwinCuts || []).filter(c => c <= a + 0.05 || c >= b - 0.05);
+  patch({ darwinClips: full ? [] : clips, darwinGaps: gaps, darwinCuts: cuts });
+}
+function closeGapAt(start, end) {
+  closeGap(start, end); state.selectedGap = null;
+  rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); seek(0); paint();
+  toast('Gap closed, reel tightened', 'success');
+}
+function selectGap(start, end) {
+  state.selectedGap = { start, end }; state.selectedDarwin = null; state.selectedClip = null; state.selectedSplit = null; state.selectedCaption = null;
+  renderInspector(); renderAssets(); renderTimeline(); seek(start);
 }
 // Editor-only: split full-Darwin blocks at darwinCuts (source-time boundaries) so
 // each piece is independently selectable/deletable. The renderer ignores cuts; it
@@ -501,6 +547,13 @@ function applyTransforms() {
 
 function applyLayout(seg, t) {
   const dv = darwinVid, sv = stockVid;
+  if (seg.isGap || seg.layout === 'gap') {
+    $('edge').style.display = 'none';
+    dSlot.style.display = 'none'; sSlot.style.display = 'none';
+    try { darwinVid.muted = true; } catch (_) {}
+    return;
+  }
+  try { darwinVid.muted = false; } catch (_) {}
   const hasDarwin = !!state.darwinUrl;
   const stockUrl = seg.stockIndex != null ? state.stockUrls[seg.stockIndex] : null;
   const dKey = darwinKey(seg), sKey = seg.stockIndex != null ? `stock-${seg.stockIndex}` : null;
@@ -697,6 +750,18 @@ function renderInspector() {
     const cd = $('capDelBtn'); if (cd) cd.onclick = deleteSelected;
     return;
   }
+  if (state.selectedGap) {
+    const g = state.selectedGap;
+    insp.innerHTML = `
+      <div class="insp-sec">
+        <div class="insp-h">Gap</div>
+        <div class="insp-meta">${fmtTime(g.start)} \u2013 ${fmtTime(g.end)} \u00b7 black, narration silent here</div>
+        <button class="btn sm" id="closeGapBtn" style="width:100%;margin-top:10px">Close gap (shift the rest left)</button>
+        <div class="insp-meta" style="margin-top:8px">Closing removes this span and pulls everything after it left, so the reel gets shorter. Or leave it as a black beat. Cmd+Z to undo.</div>
+      </div>`;
+    const cb = $('closeGapBtn'); if (cb) cb.onclick = deleteSelected;
+    return;
+  }
   if (state.selectedDarwin) {
     const d = state.selectedDarwin;
     insp.innerHTML = `
@@ -756,8 +821,8 @@ function renderInspector() {
   }
 }
 
-function selectSplit(idx) { state.selectedSplit = idx; state.selectedClip = `stock-${idx}`; state.selectedDarwin = null; state.selectedCaption = null; renderInspector(); renderAssets(); renderTimeline(); const seg = state.segments.find(s => s.stockIndex === idx); if (seg) seek(seg.start); }
-function clearSelection() { state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedCaption = null; renderInspector(); renderAssets(); renderTimeline(); applyTransforms(); }
+function selectSplit(idx) { state.selectedSplit = idx; state.selectedClip = `stock-${idx}`; state.selectedDarwin = null; state.selectedCaption = null; state.selectedGap = null; renderInspector(); renderAssets(); renderTimeline(); const seg = state.segments.find(s => s.stockIndex === idx); if (seg) seek(seg.start); }
+function clearSelection() { state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedCaption = null; state.selectedGap = null; renderInspector(); renderAssets(); renderTimeline(); applyTransforms(); }
 
 function renderClipInspector(insp, key) {
   const isStock = key.startsWith('stock-'), isDHalf = key.startsWith('dhalf-');
@@ -779,7 +844,7 @@ function renderClipInspector(insp, key) {
       <div class="insp-h">Trim &amp; cut (Darwin)</div>
       <button class="btn sm" id="dwTrimBtn" style="width:100%">Trim Darwin start / end</button>
       ${state.selectedDarwin ? `<button class="btn sm" id="dwDelBtn" style="width:100%;margin-top:8px">Delete this section</button>` : ''}
-      <div class="insp-meta" style="margin-top:6px">Park the playhead and press Cut on the timeline to split the Darwin, then delete the part you do not want.</div>` : '';
+      <div class="insp-meta" style="margin-top:6px">Cut on the timeline splits the Darwin at the playhead. Delete leaves a black gap; click the gap's \u00d7 (or its Close button) to pull the rest left and shorten the reel.</div>` : '';
   const capInfo = (idx != null) ? splitCaptionLine(idx) : null;
   const capEditor = (idx != null) ? `
       <div class="insp-h">Caption</div>
@@ -1225,7 +1290,7 @@ function cutAtPlayhead() {
     cuts.push(+srcT.toFixed(2)); cuts.sort((a, b) => a - b);
     patch({ darwinCuts: cuts });
   }
-  state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedCaption = null;
+  state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedCaption = null; state.selectedGap = null;
   rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); paint();
   toast('Cut added', 'success');
 }
@@ -1235,20 +1300,24 @@ function deleteSelected() {
     state.selectedCaption = null;
     rebuildSegments(); renderTimeline(); renderInspector(); paint();
     toast('Caption deleted', 'success');
+  } else if (state.selectedGap) {
+    closeGapAt(state.selectedGap.start, state.selectedGap.end);
   } else if (state.selectedSplit != null) {
     deleteStockSplit(state.selectedSplit);
     state.selectedSplit = null; state.selectedClip = null;
     rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); paint();
     toast('Stock clip deleted (now full Darwin)', 'success');
   } else if (state.selectedDarwin) {
-    cutDarwinRange(state.selectedDarwin.start, state.selectedDarwin.end);
-    state.selectedDarwin = null;
-    rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); seek(0); paint();
-    toast('Darwin section cut out', 'success');
-  } else { toast('Select a clip or a Darwin block first, then delete', 'error'); }
+    const a = outToSrc(state.selectedDarwin.start), b = outToSrc(state.selectedDarwin.end);
+    const gaps = (p().darwinGaps || []).slice(); gaps.push({ srcStart: +a.toFixed(2), srcEnd: +b.toFixed(2) });
+    patch({ darwinGaps: gaps });
+    state.selectedDarwin = null; state.selectedClip = null;
+    rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); paint();
+    toast('Section deleted. Black gap left, close it to tighten the reel.', 'success');
+  } else { toast('Select a clip, section, or gap first, then delete', 'error'); }
 }
 function selectDarwinSeg(start, end) {
-  state.selectedDarwin = { start, end }; state.selectedClip = 'dfull'; state.selectedSplit = null; state.selectedCaption = null;
+  state.selectedDarwin = { start, end }; state.selectedClip = 'dfull'; state.selectedSplit = null; state.selectedCaption = null; state.selectedGap = null;
   renderInspector(); renderAssets(); renderTimeline(); seek(start); applyTransforms();
 }
 
@@ -1290,7 +1359,7 @@ function setCaptionText(markerLineIdx, text) {
   const s = lines.join('\n'); patch({ scriptText: s }); const sb = $('scriptText'); if (sb) sb.value = s;
 }
 function selectCaption(markerLineIdx) {
-  state.selectedCaption = markerLineIdx; state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null;
+  state.selectedCaption = markerLineIdx; state.selectedSplit = null; state.selectedClip = null; state.selectedDarwin = null; state.selectedGap = null;
   renderInspector(); renderAssets(); renderTimeline();
   const cue = getCaptionCues().find(c => c.markerLineIdx === markerLineIdx);
   if (cue) seek(srcToOut(cue.srcT));
@@ -1342,6 +1411,10 @@ function renderTimeline() {
   // video lane blocks
   const vBlocks = state.segments.map(seg => {
     const left = seg.start * state.pxPerSec, w = (seg.end - seg.start) * state.pxPerSec;
+    if (seg.isGap || seg.layout === 'gap') {
+      const selg = state.selectedGap && Math.abs(state.selectedGap.start - seg.start) < 0.05 ? 'selected' : '';
+      return `<div class="tl-block gap ${selg}" style="left:${left}px;width:${Math.max(2,w)}px" onclick="selectGap(${seg.start},${seg.end})" title="black gap"><span class="gap-x" onclick="event.stopPropagation();closeGapAt(${seg.start},${seg.end})" title="close gap">\u00d7</span>${w > 44 ? 'gap' : ''}</div>`;
+    }
     const isSplit = seg.stockIndex != null;
     const selD = state.selectedDarwin && Math.abs(state.selectedDarwin.start - seg.start) < 0.05 && Math.abs(state.selectedDarwin.end - seg.end) < 0.05;
     const sel = isSplit ? ((seg.stockIndex === state.selectedSplit) ? 'selected' : '') : (selD ? 'selected' : '');
@@ -1461,7 +1534,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Delete' && e.key !== 'Backspace') return;
   const tag = (e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
-  if (state.selectedSplit == null && !state.selectedDarwin && state.selectedCaption == null) return;
+  if (state.selectedSplit == null && !state.selectedDarwin && state.selectedCaption == null && !state.selectedGap) return;
   e.preventDefault(); deleteSelected();
 });
 document.addEventListener('keydown', (e) => {
