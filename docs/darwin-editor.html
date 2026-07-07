@@ -655,7 +655,7 @@ function paint() {
     $('capText').style.fontWeight = cs.fontWeight || 700;
     $('capText').style.fontFamily = cs.fontFamily || 'Inter, system-ui, sans-serif';
     $('capText').style.color = cs.color || '#fff';
-    const pos = cs.position || 'bottom';
+    const pos = cap.position || cs.position || 'bottom';
     if (pos === 'top') { bar.style.top = (180 * scale) + 'px'; bar.style.bottom = 'auto'; bar.style.transform = 'none'; }
     else if (pos === 'center') { bar.style.top = '50%'; bar.style.bottom = 'auto'; bar.style.transform = 'translateY(-50%)'; }    else { bar.style.bottom = ((cs.bottom != null ? cs.bottom : 220) * scale) + 'px'; bar.style.top = 'auto'; bar.style.transform = 'none'; }
   } else { bar.classList.add('hidden'); }
@@ -771,16 +771,23 @@ function renderInspector() {
     }
     const cue = caps().find(c => c.id === state.selectedCaption);
     const txt = cue ? cue.text : '';
+    const cpos = (cue && cue.position) || 'bottom';
     insp.innerHTML = `
       <div class="insp-sec">
         <div class="insp-h">Caption</div>
         <div class="insp-meta">${cue ? `${fmtTime(cue.start)} \u2013 ${fmtTime(cue.end)}` : ''} \u00b7 drag the block anywhere on the Captions track, drag its edges to trim</div>
         <textarea id="capEdit" class="script" style="height:60px;margin-top:8px" spellcheck="false" placeholder="on-screen caption text">${escapeHtml(txt)}</textarea>
+        <label class="insp-meta" style="display:block;margin-top:8px">Position on screen</label>
+        <select id="capPosOne" class="btn sm" style="width:100%;margin-top:4px">
+          ${[['bottom','Bottom'],['center','Center'],['top','Top']].map(([v,n])=>`<option value="${v}" ${cpos===v?'selected':''}>${n}</option>`).join('')}
+        </select>
         <button class="btn sm" id="capDelBtn" style="width:100%;margin-top:8px">Delete this caption</button>
-        <div class="insp-meta" style="margin-top:6px">Clamps to 2 lines on screen. Add a new one with + Caption on the timeline.</div>
+        <div class="insp-meta" style="margin-top:6px">Clamps to 2 lines. Position is per caption, so full-frame can sit at the bottom while a split caption sits centered.</div>
       </div>`;
     const ce = $('capEdit');
     if (ce) ce.oninput = () => setCaptionText(state.selectedCaption, ce.value);
+    const cpo = $('capPosOne');
+    if (cpo) cpo.onchange = () => { const v = cpo.value; setCaps(caps().map(c => c.id === state.selectedCaption ? Object.assign({}, c, { position: v }) : c)); };
     const cd = $('capDelBtn'); if (cd) cd.onclick = deleteSelected;
     return;
   }
@@ -1423,13 +1430,11 @@ function deleteSelected() {
     rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); paint();
     toast('Stock clip deleted (now full Darwin)', 'success');
   } else if (state.selectedDarwin) {
-    const a = outToSrc(state.selectedDarwin.start), b = outToSrc(state.selectedDarwin.end);
-    const gaps = (p().darwinGaps || []).slice(); gaps.push({ srcStart: +a.toFixed(2), srcEnd: +b.toFixed(2) });
-    patch({ darwinGaps: gaps });
+    closeGap(state.selectedDarwin.start, state.selectedDarwin.end); // remove the section and pull the rest left in one step
     state.selectedDarwin = null; state.selectedClip = null;
-    rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); paint();
-    toast('Section deleted. Black gap left, close it to tighten the reel.', 'success');
-  } else { toast('Select a clip, section, or gap first, then delete', 'error'); }
+    rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); seek(0); paint();
+    toast('Section deleted, reel tightened', 'success');
+  } else { toast('Select a clip or section first, then delete', 'error'); }
 }
 function selectDarwinSeg(start, end) {
   state.selectedDarwin = { start, end }; state.selectedClip = dKey(outToSrc(start)); state.selectedSplit = null; state.selectedCaption = null; state.selCaps = []; state.selectedGap = null;
@@ -1574,8 +1579,7 @@ function renderTimeline() {
   const narrBlock = hasDarwin ? darwinPieces().map(pc => {
     const left = pc.start * state.pxPerSec, w = Math.max(4, (pc.end - pc.start) * state.pxPerSec);
     if (pc.isGap) {
-      const selg = state.selectedGap && Math.abs(state.selectedGap.start - pc.start) < 0.05 ? 'selected' : '';
-      return `<div class="tl-block gap ${selg}" style="left:${left}px;width:${w}px" onclick="selectGap(${pc.start},${pc.end})" title="black gap"><span class="gap-x" onclick="event.stopPropagation();closeGapAt(${pc.start},${pc.end})" title="close gap">\u00d7</span>${w > 44 ? 'gap' : ''}</div>`;
+      return `<div class="tl-block gap" style="left:${left}px;width:${w}px" title="black gap">${w > 44 ? 'gap' : ''}</div>`;
     }
     const seld = state.selectedDarwin && Math.abs(state.selectedDarwin.start - pc.start) < 0.05 && Math.abs(state.selectedDarwin.end - pc.end) < 0.05 ? 'selected' : '';
     const film = state.darwinFilmstrip;

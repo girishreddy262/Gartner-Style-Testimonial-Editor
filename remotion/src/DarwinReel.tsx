@@ -36,7 +36,7 @@ const HALF = H / 2; // 960
 
 type Layout = 'stock-top' | 'darwin-top' | 'full-darwin' | 'full-stock';
 type Segment = { start: number; end: number; layout: Layout; stockIndex: number | null; srcStart?: number };
-type Caption = { text: string; start: number; end: number };
+type Caption = { text: string; start: number; end: number; position?: string };
 type Clip = { srcStart: number; srcEnd: number; outStart: number; outEnd: number };
 type Gap = { srcStart: number; srcEnd: number };
 type Tx = { scale?: number; x?: number; y?: number; trimIn?: number; trimOut?: number };
@@ -178,7 +178,7 @@ export const DarwinReel: React.FC<{
           durationInFrames={Math.max(1, Math.round((cap.end - cap.start) * fps))}
           layout="none"
         >
-          <CaptionView text={cap.text} style={captionStyle} />
+          <CaptionView text={cap.text} style={{ ...captionStyle, position: cap.position || (captionStyle as { position?: string }).position }} />
         </Sequence>
       ))}
 
