@@ -542,7 +542,7 @@ function resetClipTx(key) {
 function txCss(key) { const t = clipTx(key); return `translate(${t.x}%, ${t.y}%) scale(${t.scale})`; }
 function dKey(srcStart) { return (srcStart == null || srcStart < 0.05) ? 'dfull' : ('dfull-' + Math.round(srcStart * 100)); }
 function darwinKey(seg) {
-  if (seg && seg.stockIndex != null && (seg.layout === 'stock-top' || seg.layout === 'darwin-top')) return 'dhalf-' + seg.stockIndex;
+  if (seg && seg.stockIndex != null && (seg.layout === 'stock-top' || seg.layout === 'darwin-top')) return 'dhalf';
   const src = (seg && seg.srcStart != null) ? seg.srcStart : (seg ? outToSrc(seg.start) : 0);
   return dKey(src);
 }

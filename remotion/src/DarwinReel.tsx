@@ -164,7 +164,7 @@ export const DarwinReel: React.FC<{
               slotDuration={seg.end - seg.start}
               stockStyle={txStyle(stockKey)}
               stockFit={st.fit === 'contain' ? 'contain' : 'cover'}
-              darwinMutedCopy={darwinPiece(segClip, true, `dhalf-${seg.stockIndex}`)}
+              darwinMutedCopy={darwinPiece(segClip, true, 'dhalf')}
             />
           </Sequence>
         );
