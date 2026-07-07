@@ -382,8 +382,16 @@ async function boot() {
   if (!Array.isArray(p().captionsV2)) {
     const seed = (state.captions || []).filter(c => c.text && String(c.text).trim())
       .map(c => ({ id: newCapId(), start: +(+c.start).toFixed(2), end: +(+c.end).toFixed(2), text: c.text }));
-    state.project.captionsV2 = seed; state.captions = seed;
-    DarwinAPI.update(PROJECT_ID, { captionsV2: seed }).catch(() => {});
+    const chunked = splitLongCaptions(seed);
+    state.project.captionsV2 = chunked; state.captions = chunked;
+    DarwinAPI.update(PROJECT_ID, { captionsV2: chunked }).catch(() => {});
+  } else {
+    const cur = p().captionsV2;
+    const chunked = splitLongCaptions(cur);
+    if (chunked.length !== cur.length) {
+      state.project.captionsV2 = chunked; state.captions = chunked;
+      DarwinAPI.update(PROJECT_ID, { captionsV2: chunked }).catch(() => {});
+    }
   }
   buildDarwinFilmstrip();
   renderAssets();
@@ -1433,6 +1441,38 @@ function selectDarwinSeg(start, end) {
 // fully independent of the script cues: drag anywhere, resize edges, add, delete.
 function caps() { return Array.isArray(p().captionsV2) ? p().captionsV2 : []; }
 function newCapId() { return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
+// Split a caption's text into <=2-line chunks (by word), distributing its time
+// window across them so long captions advance instead of overflowing.
+function chunkCaptionText(text, maxChars) {
+  maxChars = maxChars || 42;
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  const chunks = []; let cur = '';
+  for (const w of words) {
+    if (cur && (cur.length + 1 + w.length) > maxChars) { chunks.push(cur); cur = w; }
+    else cur = cur ? cur + ' ' + w : w;
+  }
+  if (cur) chunks.push(cur);
+  return chunks.length ? chunks : [String(text || '')];
+}
+function splitLongCaptions(list, maxChars) {
+  maxChars = maxChars || 42;
+  const out = [];
+  for (const c of (list || [])) {
+    const chunks = chunkCaptionText(c.text, maxChars);
+    if (chunks.length <= 1) { out.push(c); continue; }
+    const dur = Math.max(0.2, (c.end || 0) - (c.start || 0));
+    const totalLen = chunks.reduce((a, s) => a + s.length, 0) || 1;
+    let t = c.start || 0;
+    chunks.forEach((ch, i) => {
+      const d = dur * (ch.length / totalLen);
+      const s = +t.toFixed(2);
+      const e = +((i === chunks.length - 1) ? c.end : (t + d)).toFixed(2);
+      out.push({ id: newCapId(), start: s, end: e, text: ch });
+      t += d;
+    });
+  }
+  return out;
+}
 function setCaps(arr, opts) {
   arr = arr.slice().filter(c => c.end > c.start + 0.05).sort((a, b) => a.start - b.start);
   patch({ captionsV2: arr });
