@@ -394,6 +394,10 @@ async function boot() {
     }
   }
   buildDarwinFilmstrip();
+  if (Array.isArray(p().darwinGaps) && p().darwinGaps.length) {
+    state.project.darwinGaps = [];
+    DarwinAPI.update(PROJECT_ID, { darwinGaps: [] }).catch(() => {});
+  }
   renderAssets();
   renderTimeline();
   renderInspector();
@@ -651,13 +655,16 @@ function paint() {
     const scale = frameH / 1920;
     bar.classList.remove('hidden');
     $('capText').textContent = cap.text;
+    $('capText').style.whiteSpace = 'pre-line';
     $('capText').style.fontSize = Math.max(8, (cs.fontSize || 52) * scale) + 'px';
     $('capText').style.fontWeight = cs.fontWeight || 700;
     $('capText').style.fontFamily = cs.fontFamily || 'Inter, system-ui, sans-serif';
     $('capText').style.color = cs.color || '#fff';
     const pos = cap.position || cs.position || 'bottom';
+    const capBottom = cap.bottom != null ? cap.bottom : (cs.bottom != null ? cs.bottom : 220);
     if (pos === 'top') { bar.style.top = (180 * scale) + 'px'; bar.style.bottom = 'auto'; bar.style.transform = 'none'; }
-    else if (pos === 'center') { bar.style.top = '50%'; bar.style.bottom = 'auto'; bar.style.transform = 'translateY(-50%)'; }    else { bar.style.bottom = ((cs.bottom != null ? cs.bottom : 220) * scale) + 'px'; bar.style.top = 'auto'; bar.style.transform = 'none'; }
+    else if (pos === 'center') { bar.style.top = '50%'; bar.style.bottom = 'auto'; bar.style.transform = 'translateY(-50%)'; }
+    else { bar.style.bottom = (capBottom * scale) + 'px'; bar.style.top = 'auto'; bar.style.transform = 'none'; }
   } else { bar.classList.add('hidden'); }
   // readouts + playhead
   $('timeRead').textContent = `${fmtTime(t)} / ${fmtTime(total())}`;
@@ -779,10 +786,10 @@ function renderInspector() {
         <textarea id="capEdit" class="script" style="height:60px;margin-top:8px" spellcheck="false" placeholder="on-screen caption text">${escapeHtml(txt)}</textarea>
         <label class="insp-meta" style="display:block;margin-top:8px">Position on screen</label>
         <select id="capPosOne" class="btn sm" style="width:100%;margin-top:4px">
-          ${[['bottom','Bottom'],['center','Center'],['top','Top']].map(([v,n])=>`<option value="${v}" ${cpos===v?'selected':''}>${n}</option>`).join('')}
+          ${[['bottom','Bottom'],['center','Center'],['top','Top'],['custom','Custom (dragged)']].map(([v,n])=>`<option value="${v}" ${cpos===v?'selected':''}>${n}</option>`).join('')}
         </select>
         <button class="btn sm" id="capDelBtn" style="width:100%;margin-top:8px">Delete this caption</button>
-        <div class="insp-meta" style="margin-top:6px">Clamps to 2 lines. Position is per caption, so full-frame can sit at the bottom while a split caption sits centered.</div>
+        <div class="insp-meta" style="margin-top:6px">Drag the caption in the preview to place it anywhere; that sets Custom for this caption only.</div>
       </div>`;
     const ce = $('capEdit');
     if (ce) ce.oninput = () => setCaptionText(state.selectedCaption, ce.value);
@@ -1129,14 +1136,22 @@ function wireCaptionDrag() {
   if (!span) return;
   span.addEventListener('mousedown', (e) => {
     e.preventDefault(); e.stopPropagation();
+    const t = outNow();
+    const cap = caps().find(c => t >= c.start && t < c.end);
+    if (!cap) return;
     const fr = $('frame').getBoundingClientRect();
+    let last = null;
     const onMove = (ev) => {
       const fromBottom = Math.max(40, Math.min(fr.height - 20, fr.bottom - ev.clientY));
-      const bottom1920 = Math.round(fromBottom / fr.height * 1920);
-      patch({ captionStyle: { ...(p().captionStyle || {}), position: 'custom', bottom: bottom1920 } });
-      paint();
+      last = Math.round(fromBottom / fr.height * 1920);
+      const bar = $('capBar');
+      bar.style.top = 'auto'; bar.style.transform = 'none';
+      bar.style.bottom = (last / 1920 * fr.height) + 'px';
     };
-    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+      if (last != null) setCaps(caps().map(c => c.id === cap.id ? Object.assign({}, c, { position: 'custom', bottom: last }) : c));
+    };
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
   });
 }
@@ -1353,18 +1368,16 @@ function cutAtPlayhead() {
   rebuildSegments(); renderAssets(); renderTimeline(); renderInspector(); paint();
   toast('Cut added', 'success');
 }
-// The Darwin as one continuous clip track: full [0,total] split by cut points and gaps.
+// The Darwin as one continuous clip track: full [0,total] split at cut points only.
 function darwinPieces() {
   const T = total();
-  const gaps = (p().darwinGaps || []).map(g => ({ a: srcToOut(g.srcStart), b: srcToOut(g.srcEnd) })).filter(g => g.b > g.a + 0.02);
   const cutOuts = (p().darwinCuts || []).map(c => srcToOut(c)).filter(o => o > 0.05 && o < T - 0.05);
-  const bounds = [0, T].concat(cutOuts).concat(gaps.reduce((acc, g) => acc.concat([g.a, g.b]), [])).filter(x => x >= 0 && x <= T);
+  const bounds = [0, T].concat(cutOuts).filter(x => x >= 0 && x <= T);
   const uniq = Array.from(new Set(bounds.map(x => +x.toFixed(3)))).sort((a, b) => a - b);
   const pieces = [];
   for (let i = 0; i < uniq.length - 1; i++) {
     const s = uniq[i], e = uniq[i + 1]; if (e - s < 0.03) continue;
-    const mid = (s + e) / 2;
-    pieces.push({ start: s, end: e, isGap: gaps.some(g => mid > g.a && mid < g.b) });
+    pieces.push({ start: s, end: e, isGap: false });
   }
   return pieces;
 }
@@ -1535,7 +1548,7 @@ function duplicateSelection() {
   toast(`Duplicated ${added.length} caption${added.length > 1 ? 's' : ''}`, 'success');
 }
 function setCaptionText(id, text) {
-  const clean = (text || '').replace(/\s*[\u2013\u2014]\s*/g, ', ').replace(/\r?\n/g, ' ');
+  const clean = (text || '').replace(/[\u2013\u2014]/g, ',');
   setCaps(caps().map(c => c.id === id ? Object.assign({}, c, { text: clean }) : c));
 }
 function addCaptionAtPlayhead() {

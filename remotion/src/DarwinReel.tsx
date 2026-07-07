@@ -36,7 +36,7 @@ const HALF = H / 2; // 960
 
 type Layout = 'stock-top' | 'darwin-top' | 'full-darwin' | 'full-stock';
 type Segment = { start: number; end: number; layout: Layout; stockIndex: number | null; srcStart?: number };
-type Caption = { text: string; start: number; end: number; position?: string };
+type Caption = { text: string; start: number; end: number; position?: string; bottom?: number };
 type Clip = { srcStart: number; srcEnd: number; outStart: number; outEnd: number };
 type Gap = { srcStart: number; srcEnd: number };
 type Tx = { scale?: number; x?: number; y?: number; trimIn?: number; trimOut?: number };
@@ -178,7 +178,7 @@ export const DarwinReel: React.FC<{
           durationInFrames={Math.max(1, Math.round((cap.end - cap.start) * fps))}
           layout="none"
         >
-          <CaptionView text={cap.text} style={{ ...captionStyle, position: cap.position || (captionStyle as { position?: string }).position }} />
+          <CaptionView text={cap.text} style={{ ...captionStyle, position: cap.position || (captionStyle as { position?: string }).position, bottom: (cap as { bottom?: number }).bottom != null ? (cap as { bottom?: number }).bottom : (captionStyle as { bottom?: number }).bottom }} />
         </Sequence>
       ))}
 
@@ -261,7 +261,7 @@ const CaptionView: React.FC<{ text: string; style: Partial<CaptionStyle> }> = ({
         opacity, maxWidth: s.maxWidth, margin: '0 60px', padding: '18px 30px',
         background: s.bg, borderRadius: 18, color: s.color, fontFamily: s.fontFamily,
         fontSize: s.fontSize, fontWeight: s.fontWeight, lineHeight: 1.25, textAlign: 'center',
-        display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden',
+        display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden', whiteSpace: 'pre-line',
       }}>
         {text}
       </div>
