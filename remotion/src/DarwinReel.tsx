@@ -38,7 +38,40 @@ type Layout = 'stock-top' | 'darwin-top' | 'full-darwin' | 'full-stock';
 type Segment = { start: number; end: number; layout: Layout; stockIndex: number | null; srcStart?: number };
 type Caption = { text: string; start: number; end: number };
 type Clip = { srcStart: number; srcEnd: number; outStart: number; outEnd: number };
+type Gap = { srcStart: number; srcEnd: number };
 type Tx = { scale?: number; x?: number; y?: number; trimIn?: number; trimOut?: number };
+
+// Per-piece full-frame Darwin key by SOURCE start (matches the editor). Uncut
+// Darwin -> 'dfull'; each cut piece -> 'dfull-<srcStart*100>'. Split halves use
+// their own 'dhalf-<stockIndex>' key so half-frame framing is independent.
+const dKey = (srcStart: number) => (srcStart == null || srcStart < 0.05 ? 'dfull' : 'dfull-' + Math.round(srcStart * 100));
+
+// Split the base spine at cut points and gap edges (source-time). Non-gap pieces
+// play Darwin (audio on) with their own transform; gap pieces render black with
+// NO Darwin element, so they are silent automatically.
+function buildBasePieces(clips: Clip[], cutsSrc: number[], gapsSrc: Gap[], fps: number) {
+  const out: { outStart: number; outEnd: number; srcStart: number; srcEnd: number; isGap: boolean }[] = [];
+  const minLen = 1 / Math.max(1, fps);
+  for (const c of clips) {
+    const bset = new Set<number>([c.srcStart, c.srcEnd]);
+    for (const cut of cutsSrc || []) if (cut > c.srcStart + 1e-4 && cut < c.srcEnd - 1e-4) bset.add(cut);
+    for (const g of gapsSrc || []) {
+      if (g.srcEnd > c.srcStart && g.srcStart < c.srcEnd) {
+        bset.add(Math.max(c.srcStart, g.srcStart));
+        bset.add(Math.min(c.srcEnd, g.srcEnd));
+      }
+    }
+    const bounds = Array.from(bset).sort((a, b) => a - b);
+    for (let i = 0; i < bounds.length - 1; i++) {
+      const a = bounds[i], b = bounds[i + 1];
+      if (b - a < minLen) continue;
+      const mid = (a + b) / 2;
+      const isGap = (gapsSrc || []).some(g => mid > g.srcStart && mid < g.srcEnd);
+      out.push({ outStart: c.outStart + (a - c.srcStart), outEnd: c.outStart + (b - c.srcStart), srcStart: a, srcEnd: b, isGap });
+    }
+  }
+  return out;
+}
 
 export const DarwinReel: React.FC<{
   darwinUrl?: string | null;
@@ -48,6 +81,8 @@ export const DarwinReel: React.FC<{
   segments?: Segment[];
   captions?: Caption[];
   darwinClips?: Clip[];
+  darwinCuts?: number[];
+  darwinGaps?: Gap[];
   clipTransforms?: Record<string, Tx>;
   totalDuration?: number;
   captionStyle?: Partial<CaptionStyle>;
@@ -59,6 +94,8 @@ export const DarwinReel: React.FC<{
   segments = [],
   captions = [],
   darwinClips = [],
+  darwinCuts = [],
+  darwinGaps = [],
   clipTransforms = {},
   totalDuration = 0,
   captionStyle = {},
@@ -77,6 +114,8 @@ export const DarwinReel: React.FC<{
       ? darwinClips
       : [{ srcStart: 0, srcEnd: outTotal, outStart: 0, outEnd: outTotal }];
 
+  const basePieces = buildBasePieces(clips, darwinCuts, darwinGaps, fps);
+
   const darwinPiece = (c: Clip, muted: boolean, txKey: string, objectPosition = 'center top') =>
     darwinUrl ? (
       <OffthreadVideo
@@ -92,17 +131,19 @@ export const DarwinReel: React.FC<{
 
   return (
     <AbsoluteFill style={{ backgroundColor: '#000' }}>
-      {/* BASE: continuous Darwin spine, played as one-or-more kept clips */}
-      {clips.map((c, i) => (
-        <Sequence
-          key={`base-${i}`}
-          from={Math.round(c.outStart * fps)}
-          durationInFrames={Math.max(1, Math.round((c.outEnd - c.outStart) * fps))}
-          layout="none"
-        >
-          <AbsoluteFill>{darwinPiece(c, false, 'dfull')}</AbsoluteFill>
-        </Sequence>
-      ))}
+      {/* BASE: Darwin spine split at cuts + gaps. Non-gap = Darwin (audio on)
+          with its own per-piece transform; gap = black + silent (no Darwin). */}
+      {basePieces.map((pc, i) =>
+        pc.isGap ? (
+          <Sequence key={`gap-${i}`} from={Math.round(pc.outStart * fps)} durationInFrames={Math.max(1, Math.round((pc.outEnd - pc.outStart) * fps))} layout="none">
+            <AbsoluteFill style={{ backgroundColor: '#000' }} />
+          </Sequence>
+        ) : (
+          <Sequence key={`base-${i}`} from={Math.round(pc.outStart * fps)} durationInFrames={Math.max(1, Math.round((pc.outEnd - pc.outStart) * fps))} layout="none">
+            <AbsoluteFill>{darwinPiece({ srcStart: pc.srcStart, srcEnd: pc.srcEnd, outStart: pc.outStart, outEnd: pc.outEnd }, false, dKey(pc.srcStart))}</AbsoluteFill>
+          </Sequence>
+        )
+      )}
 
       {/* OVERLAYS: one per segment that changes the visual */}
       {segments.map((seg, i) => {

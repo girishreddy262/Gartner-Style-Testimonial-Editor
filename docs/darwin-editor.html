@@ -540,7 +540,12 @@ function resetClipTx(key) {
   lastStockIndex = -2; applyTransforms(); paint(); renderInspector();
 }
 function txCss(key) { const t = clipTx(key); return `translate(${t.x}%, ${t.y}%) scale(${t.scale})`; }
-function darwinKey(seg) { return 'dfull'; } // Darwin is one clip: one framing everywhere (full frame or inside a split)
+function dKey(srcStart) { return (srcStart == null || srcStart < 0.05) ? 'dfull' : ('dfull-' + Math.round(srcStart * 100)); }
+function darwinKey(seg) {
+  if (seg && seg.stockIndex != null && (seg.layout === 'stock-top' || seg.layout === 'darwin-top')) return 'dhalf-' + seg.stockIndex;
+  const src = (seg && seg.srcStart != null) ? seg.srcStart : (seg ? outToSrc(seg.start) : 0);
+  return dKey(src);
+}
 function stockKey(seg) { return (seg && seg.stockIndex != null) ? `stock-${seg.stockIndex}` : null; }
 
 function applyTransforms() {
@@ -1419,7 +1424,7 @@ function deleteSelected() {
   } else { toast('Select a clip, section, or gap first, then delete', 'error'); }
 }
 function selectDarwinSeg(start, end) {
-  state.selectedDarwin = { start, end }; state.selectedClip = 'dfull'; state.selectedSplit = null; state.selectedCaption = null; state.selectedGap = null;
+  state.selectedDarwin = { start, end }; state.selectedClip = dKey(outToSrc(start)); state.selectedSplit = null; state.selectedCaption = null; state.selCaps = []; state.selectedGap = null;
   renderInspector(); renderAssets(); renderTimeline(); applyTransforms();
 }
 
