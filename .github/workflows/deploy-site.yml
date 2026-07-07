@@ -1,0 +1,19 @@
+name: Deploy Remotion Site
+on:
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Install deps
+        run: npm install --no-audit --no-fund
+        working-directory: remotion
+      - name: Deploy site
+        working-directory: remotion
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: npx remotion lambda sites create src/index.ts --site-name=testimonial-editor --region=ap-south-1
