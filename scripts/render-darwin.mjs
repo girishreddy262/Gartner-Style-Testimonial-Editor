@@ -38,6 +38,8 @@ const inputProps = {
   segments: Array.isArray(project.segments) ? project.segments : [],
   captions: Array.isArray(project.captions) ? project.captions : [],
   darwinClips: Array.isArray(project.darwinClips) ? project.darwinClips : [],
+  darwinCuts: Array.isArray(project.darwinCuts) ? project.darwinCuts : [],
+  darwinGaps: Array.isArray(project.darwinGaps) ? project.darwinGaps : [],
   clipTransforms: (project.clipTransforms && typeof project.clipTransforms === 'object') ? project.clipTransforms : {},
   totalDuration,
   captionStyle: project.captionStyle || {},
