@@ -65,6 +65,10 @@
 <script src="js/parser.js"></script>
 <script src="js/api.js"></script>
 <script>
+  // Length of the generated intro card, in seconds. Must match VIDEO_START in
+  // js/editor.js and intro.duration consumed by the Remotion composition.
+  const INTRO_DURATION = 5.0;
+
   const state = { videoFile: null, docxFile: null, parsed: null };
 
   function setupDropzone(zoneId, inputId, fileType, onFile) {
@@ -158,6 +162,11 @@
     panel.style.display = 'block'; panel.className = 'preview-panel';
 
     let html = `<div class="preview-title">✓ Parsed — ${p.scenes.length} scene${p.scenes.length === 1 ? '' : 's'} detected</div>`;
+    if (p.scenes.length) {
+      html += `<div class="preview-scene-meta" style="margin:-6px 0 10px">
+        Times below are final-video times: your doc timestamps + ${INTRO_DURATION}s intro.
+      </div>`;
+    }
     if (p.speaker.name) {
       html += `<div class="preview-scene" style="border-left-color:#fbbf24">
         <div class="preview-scene-name">Namecard: ${escapeHtml(p.speaker.name)}${p.speaker.designation ? ' — ' + escapeHtml(p.speaker.designation) : ''}</div>
@@ -178,7 +187,7 @@
       else { const n = (s.props.bullets || []).length; label = `${s.props.title} (${n} bullet${n === 1 ? '' : 's'})`; }
       html += `<div class="preview-scene ${klass}">
         <div class="preview-scene-name">${escapeHtml(label)}</div>
-        <div class="preview-scene-meta">${fmtTime(s.start)} – ${fmtTime(s.end)} · ${s.layout}</div>
+        <div class="preview-scene-meta">${fmtTime(s.start + INTRO_DURATION)} – ${fmtTime(s.end + INTRO_DURATION)} · doc ${fmtTime(s.start)} · ${s.layout}</div>
       </div>`;
     });
     panel.innerHTML = html;
@@ -233,6 +242,14 @@
   function convertParsedToEditorState(parsed, videoFileName) {
     const scenes = parsed.scenes || [];
 
+    // Timestamps in the DOCX are measured against the SOURCE VIDEO, but the
+    // editor timeline and the Remotion composition both run on FINAL VIDEO
+    // time, where the speaker video does not begin until the intro has
+    // finished (<Sequence from={introFrames}> / VIDEO_START).
+    // Shift every callout time by the intro duration so a callout written at
+    // 1:29 lands on 1:29 of the speaker's actual speech.
+    const shift = (t) => Math.round(((t || 0) + INTRO_DURATION) * 10) / 10;
+
     // ── INTRO ───────────────────────────────────────────────────────────
     // Pull meta icons from FIRST meta_intro scene if present. Otherwise leave blank.
     // Prefer the HC / Industry / Geo lines found before the first callout.
@@ -247,7 +264,7 @@
     };
 
     const intro = {
-      duration: 5.0,
+      duration: INTRO_DURATION,
       headline: parsed.introHeadline || '',
       icon1: findMetaText('industry'),   // industry text
       icon2: findMetaText('employees'),  // employees text
@@ -256,13 +273,19 @@
     };
 
     // ── NAMECARD ────────────────────────────────────────────────────────
-    // Show from t=5 (after intro) until t=8 (3 seconds), or until first callout starts.
-    const firstCalloutStart = scenes.length > 0 ? Math.min(...scenes.map(s => s.start)) : 240;
-    const namecardEnd = Math.min(8, Math.max(8, firstCalloutStart));
+    // Runs for 3s from the moment the video starts, but ends early if the
+    // first callout lands sooner than that.
+    const firstCalloutStart = scenes.length > 0
+      ? shift(Math.min(...scenes.map(s => s.start)))
+      : INTRO_DURATION + 3;
+    const namecardEnd = Math.max(
+      INTRO_DURATION + 1,
+      Math.min(INTRO_DURATION + 3, firstCalloutStart)
+    );
     const namecard = {
       name: parsed.speaker?.name || '',
       role: parsed.speaker?.designation || '',
-      start: 5,
+      start: INTRO_DURATION,
       end: namecardEnd,
     };
 
@@ -270,9 +293,9 @@
     const callouts = scenes.map((s, idx) => {
       const id = 'c' + (idx + 1);
       const layout = s.layout;
-      const start = s.start;
-      const end = s.end;
-      const bulletTimings = s.bulletTimings || [];
+      const start = shift(s.start);
+      const end = shift(s.end);
+      const bulletTimings = (s.bulletTimings || []).map(shift);
 
       if (layout === 'meta_intro') {
         return {
@@ -326,7 +349,7 @@
 
     // ── TOTAL DURATION ──────────────────────────────────────────────────
     // Use the latest scene end + small tail, OR fall back to 240s.
-    const latestEnd = scenes.length > 0 ? Math.max(...scenes.map(s => s.end)) : 0;
+    const latestEnd = scenes.length > 0 ? Math.max(...scenes.map(s => shift(s.end))) : 0;
     const totalDuration = Math.max(240, Math.ceil(latestEnd + 10));
 
     return { intro, namecard, callouts, global, totalDuration };
