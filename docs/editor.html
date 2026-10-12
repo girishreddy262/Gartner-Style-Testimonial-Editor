@@ -1187,6 +1187,10 @@ function updateOutro(t) {
   }
 }
 
+// Default intro headline size, in canvas px. Must match DEFAULT_HEADLINE_SIZE
+// in remotion/src/scenes/Intro.tsx and the 72px in .intro-headline CSS.
+const DEFAULT_HEADLINE_SIZE = 72;
+
 const state = {
   currentTime: 0,
   playing: false,
@@ -1196,6 +1200,8 @@ const state = {
   intro: {
     duration: 5.0,
     headline: 'Revolutionizing Frontline Workforce Benefits with Darwinbox',
+    // Headline font size in canvas px. Mirrored by Intro.tsx at render time.
+    headlineSize: DEFAULT_HEADLINE_SIZE,
     icon1: 'ITES',
     icon2: '3,000',
     icon3: 'US + 9 countries',
@@ -1871,6 +1877,7 @@ function renderCanvas() {
   if (document.activeElement !== introHl) {
     introHl.innerHTML = escapeHtml(state.intro.headline).replace(/\n/g, '<br>');
   }
+  introHl.style.fontSize = (state.intro.headlineSize || DEFAULT_HEADLINE_SIZE) + 'px';
   document.getElementById('introIcon1').textContent = state.intro.icon1;
   document.getElementById('introIcon2').textContent = state.intro.icon2;
   document.getElementById('introIcon3').textContent = state.intro.icon3;
@@ -2405,6 +2412,10 @@ function inspectorIntro() {
     <div class="inspector-title">Intro card · 5s</div>
     <div class="inspector-section">
       <div class="field"><div class="field-label">Headline</div><textarea class="field-input" data-bind="intro.headline" rows="3">${escapeHtml(state.intro.headline)}</textarea></div>
+      <div class="field">
+        <div class="field-label"><span>Headline size</span><span class="field-value-readout">${state.intro.headlineSize || DEFAULT_HEADLINE_SIZE}px</span></div>
+        <input type="range" data-bind="intro.headlineSize" min="36" max="96" value="${state.intro.headlineSize || DEFAULT_HEADLINE_SIZE}" step="2">
+      </div>
       <div class="field"><div class="field-label">Industry</div><input class="field-input" data-bind="intro.icon1" value="${escapeHtml(state.intro.icon1)}"/></div>
       <div class="field"><div class="field-label">Employees</div><input class="field-input" data-bind="intro.icon2" value="${escapeHtml(state.intro.icon2)}"/></div>
       <div class="field"><div class="field-label">Location</div><input class="field-input" data-bind="intro.icon3" value="${escapeHtml(state.intro.icon3)}"/></div>
@@ -2807,6 +2818,13 @@ function renderInlineBold(rawText) {
   return s;
 }
 
+// Push state.intro.headlineSize onto the preview headline. Intro.tsx reads the
+// same value at render time, so the editor and the render stay in step.
+function applyIntroHeadlineSize() {
+  const el = document.getElementById('introHeadline');
+  if (el) el.style.fontSize = (state.intro.headlineSize || DEFAULT_HEADLINE_SIZE) + 'px';
+}
+
 function bindInspector() {
   // Field bindings
   document.querySelectorAll('[data-bind]').forEach(el => {
@@ -2824,7 +2842,8 @@ function bindInspector() {
           if (path === 'global.videoScale') readout.textContent = (+val).toFixed(2) + '×';
           else readout.textContent = val + 'px';
         }
-        applyVideoPosition();
+        if (path === 'intro.headlineSize') applyIntroHeadlineSize();
+        else applyVideoPosition();
         return;
       }
 
@@ -3831,6 +3850,8 @@ function buildProjectPayload() {
 function hydrateFromProject(p) {
   if (!p) return;
   if (p.intro) Object.assign(state.intro, p.intro);
+  // Projects saved before the headline-size control existed have no value.
+  if (!state.intro.headlineSize) state.intro.headlineSize = DEFAULT_HEADLINE_SIZE;
   if (p.namecard) Object.assign(state.namecard, p.namecard);
   if (p.global) Object.assign(state.global, p.global);
   if (Array.isArray(p.callouts)) state.callouts = p.callouts;
