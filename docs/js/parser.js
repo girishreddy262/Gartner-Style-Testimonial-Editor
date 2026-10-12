@@ -1,9 +1,70 @@
 // Testimonial callout DOCX parser - browser module
 // Depends on: mammoth.browser.min.js (loaded via CDN in upload.html)
 // Exposes: window.parseCalloutsDocx(arrayBuffer) → Promise<parsed>
+//
+// Accepted document shape (all markers case-insensitive):
+//
+//   Title callout: <intro headline>        ← optional, becomes the intro headline
+//   HC: 9.5K+                              ← optional intro meta (also Industry:, Geo:)
+//   Industry: F&B, Retail
+//   Geo: Indonesia
+//
+//   Name plate for main video:             ← also accepts [SPEAKER]
+//   Gemini Aryanto
+//   Group CHRO
+//
+//   [CALLOUT 1] 0:04-0:12                  ← also accepts [SLIDE n], [SCENE n], [CARD n]
+//   AI-Enabled HCM at Scale                ← first line = title
+//   9.5K+ employees                        ← every line after = a bullet
+//   Blended workforce
+//   5+ markets
+//
+// Bullets may be real Word list items, or plain paragraphs, or paragraphs
+// prefixed with - • * > → ◦ ▪. Production notes wrapped in <angle brackets>
+// are stripped out.
 
 (function (global) {
   'use strict';
+
+  // ───────────────────────────── patterns ─────────────────────────────
+
+  // [CALLOUT 1] 0:04-0:12  /  [SLIDE 2] 0:13 – 0:17  /  CALLOUT 3 0:19-0:25
+  // Brackets optional, but when absent a time range is required so that an
+  // ordinary sentence mentioning "callout 2" is not mistaken for a marker.
+  const MARKER_RE = /^\s*(\[|\()?\s*(?:SLIDE|CALLOUT|SCENE|CARD)\s*#?\s*(\d+)\s*(\]|\))?\s*[:.\-–—]?\s*(.*)$/i;
+
+  // Title callout: ...  /  Title: ...  /  Headline: ...
+  const TITLE_RE = /^\s*(?:title\s*(?:callout|card|slide)?|headline|intro\s*(?:title|headline)?)\s*[:\-–]\s*(.+)$/i;
+
+  // Name plate for main video:  /  Namecard:  /  [SPEAKER]  /  Speaker:
+  const SPEAKER_RE = /^\s*(?:\[\s*speaker\s*\]|name\s*plate[^:]*|name\s*card[^:]*|namecard[^:]*|speaker)\s*:?\s*(.*)$/i;
+
+  // [SECTION TITLE SLIDE]
+  const SECTION_RE = /^\s*\[\s*section\s*title[^\]]*\]\s*(.*)$/i;
+
+  // [industry] F&B   /   [HC] 9.5K+
+  const META_BRACKET_RE = /^\s*\[(industry|hc|headcount|employees|locn|location|geo|geography|sector|vertical)\]\s*(.*)$/i;
+
+  // Industry: F&B   /   HC: 9.5K+   /   Geo: Indonesia
+  const META_COLON_RE = /^\s*(industry|hc|headcount|employees|locn|location|geo|geography|sector|vertical)\s*[:\-–]\s*(.+)$/i;
+
+  // Leading bullet glyphs the author may have typed by hand.
+  const BULLET_PREFIX_RE = /^[\-–—•\*→◦▪‣>»]+\s*/;
+
+  const META_ICON_MAP = {
+    industry: 'industry',
+    sector: 'industry',
+    vertical: 'industry',
+    hc: 'people',
+    headcount: 'people',
+    employees: 'people',
+    locn: 'location',
+    location: 'location',
+    geo: 'location',
+    geography: 'location',
+  };
+
+  // ───────────────────────────── helpers ──────────────────────────────
 
   function parseTime(s) {
     if (!s) return null;
@@ -17,45 +78,64 @@
   }
 
   function extractTimeRange(text) {
-    const re = /(\d+[:;.]?\d+)\s*[-–—]\s*(\d+[:;.]?\d*)/;
+    if (!text) return null;
+    const re = /(\d+[:;.]?\d+)\s*(?:[-–—]|to)\s*(\d+[:;.]?\d*)/i;
     const m = text.match(re);
     if (!m) return null;
     const startSec = parseTime(m[1]);
     let endRaw = m[2];
+    // "0:45 - 58" → treat 58 as seconds inside the same minute
     if (!/[:;]/.test(endRaw) && startSec !== null) {
       const startMin = Math.floor(startSec / 60);
-      endRaw = startMin + ':' + endRaw.padStart(2, '0');
+      endRaw = startMin + ':' + String(endRaw).padStart(2, '0');
     }
     const endSec = parseTime(endRaw);
     if (startSec === null || endSec === null) return null;
     return { start: startSec, end: endSec };
   }
 
-  function extractMetaItem(text) {
-    const m = text.match(/^\s*\[(industry|HC|locn|location)\]\s*(.*)$/i);
-    if (!m) return null;
-    const iconMap = { industry: 'industry', hc: 'people', locn: 'location', location: 'location' };
-    return { icon: iconMap[m[1].toLowerCase()], text: m[2].trim() };
+  // Remove <production notes> but leave a lone ">" bullet glyph alone.
+  // Internal whitespace is preserved: tabs and double spaces are how a bullet
+  // pins its own timestamp (see splitBulletTime).
+  function stripNotes(text) {
+    return String(text == null ? '' : text).replace(/<[^<>]*>/g, ' ').trim();
   }
 
+  // Tidy whitespace for text that will be displayed rather than time-split.
+  function squash(text) {
+    return String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  }
+
+  function extractMetaItem(text) {
+    let m = text.match(META_BRACKET_RE);
+    if (m) {
+      const value = (m[2] || '').trim();
+      if (!value) return null;
+      return { icon: META_ICON_MAP[m[1].toLowerCase()] || 'industry', text: value };
+    }
+    m = text.match(META_COLON_RE);
+    if (m) {
+      return { icon: META_ICON_MAP[m[1].toLowerCase()] || 'industry', text: m[2].trim() };
+    }
+    return null;
+  }
+
+  // "Manual payroll<TAB>0:12" → pin this bullet to 0:12
   function splitBulletTime(text) {
-    const re = /^(.*?)\s*[\t]+\s*(\d+[:;]\d+)\s*$/;
-    const m = text.match(re);
+    const m = text.match(/^(.*?)\s*\t+\s*(\d+[:;]\d+)\s*$/);
     if (m) return { text: m[1].trim(), time: parseTime(m[2]) };
-    const re2 = /^(.*?)\s{2,}(\d+[:;]\d+)\s*$/;
-    const m2 = text.match(re2);
+    const m2 = text.match(/^(.*?)\s{2,}(\d+[:;]\d+)\s*$/);
     if (m2) return { text: m2[1].trim(), time: parseTime(m2[2]) };
     return { text: text.trim(), time: null };
   }
 
   function expandParagraph(pEl) {
     // Split a <p> on <br> into logical lines
-    const html = pEl.innerHTML;
-    const segs = html.split(/<br\s*\/?>/i);
+    const segs = pEl.innerHTML.split(/<br\s*\/?>/i);
     return segs.map(s => {
       const tmp = document.createElement('div');
       tmp.innerHTML = s;
-      return (tmp.textContent || '').trim();
+      return (tmp.textContent || '').replace(/ /g, ' ').trim();
     }).filter(Boolean);
   }
 
@@ -71,11 +151,6 @@
     const timeCompareRe = /(\d+)\s*(months?|minutes?|hours?|days?|weeks?|years?)\s*(>>|→|->|to)\s*(\d+)\s*(months?|minutes?|hours?|days?|weeks?|years?)/i;
     if (timeCompareRe.test(allText)) return 'time_comparison';
 
-    const hasInlineMetric = bullets.some(b =>
-      /(\d+%|\d+x|→|->|>>|hours\/weeks|hours→|min→)/i.test(b.text)
-    );
-    if (hasInlineMetric) return 'bullets_with_inline_metric';
-
     return 'bullets_with_inline_metric';
   }
 
@@ -84,11 +159,11 @@
     const allHaveTime = block.bullets.every(b => b.time !== null && b.time !== undefined);
     if (allHaveTime) return block.bullets.map(b => b.time);
 
-    const dur = block.end - block.start;
+    const dur = Math.max(0, (block.end || 0) - (block.start || 0));
     const n = block.bullets.length;
     const padStart = Math.min(2, dur * 0.1);
     const padEnd = Math.min(3, dur * 0.15);
-    const usable = dur - padStart - padEnd;
+    const usable = Math.max(0, dur - padStart - padEnd);
     const step = n === 1 ? 0 : usable / (n - 1);
     const out = [];
     for (let i = 0; i < n; i++) {
@@ -118,7 +193,7 @@
     const itemTimings = isMeta
       ? distributeBulletTimings({
           bullets: block.meta.map(() => ({ time: null })),
-          start: block.start, end: block.end
+          start: block.start, end: block.end,
         })
       : null;
 
@@ -126,12 +201,13 @@
       type, layout,
       start: block.start, end: block.end,
       props,
-      bulletTimings: isMeta ? itemTimings : bulletTimings
+      bulletTimings: isMeta ? itemTimings : bulletTimings,
     };
   }
 
+  // ───────────────────────────── main ─────────────────────────────────
+
   async function parseCalloutsDocx(arrayBuffer) {
-    // mammoth.browser.min.js exposes window.mammoth
     if (!global.mammoth) throw new Error('mammoth.js not loaded');
 
     const { value: html } = await global.mammoth.convertToHtml({ arrayBuffer });
@@ -142,27 +218,37 @@
     const result = {
       speaker: { name: null, designation: null },
       introHeadline: null,
-      scenes: []
+      introMeta: [],     // HC / Industry / Geo found before the first callout
+      scenes: [],
     };
 
-    const slideStartRe = /^\s*\[SLIDE\s+\d+\s*\]\s*(.+?)(?:\s*\(.*\))?\s*$/i;
-
+    // ── flatten the document into a list of lines and list-blocks ──────
     const tokens = [];
-    for (const el of Array.from(wrap.children)) {
-      const tag = el.tagName.toLowerCase();
-      if (tag === 'p') {
-        const lines = expandParagraph(el);
-        lines.forEach(line => tokens.push({ kind: 'line', text: line }));
-      } else if (tag === 'ul' || tag === 'ol') {
-        const items = [];
-        for (const li of Array.from(el.children)) {
-          const t = (li.textContent || '').trim();
-          if (t) items.push(t);
+    (function walk(node) {
+      for (const el of Array.from(node.children)) {
+        const tag = el.tagName.toLowerCase();
+        if (tag === 'p' || /^h[1-6]$/.test(tag)) {
+          expandParagraph(el).forEach(line => tokens.push({ kind: 'line', text: line }));
+        } else if (tag === 'ul' || tag === 'ol') {
+          const items = [];
+          for (const li of Array.from(el.children)) {
+            const t = (li.textContent || '').replace(/ /g, ' ').trim();
+            if (t) items.push(t);
+          }
+          if (items.length) tokens.push({ kind: 'list', items });
+        } else if (tag === 'table') {
+          // Word tables: read each cell as its own line, top-to-bottom.
+          for (const cell of Array.from(el.querySelectorAll('td, th'))) {
+            const t = (cell.textContent || '').replace(/ /g, ' ').trim();
+            if (t) tokens.push({ kind: 'line', text: t });
+          }
+        } else {
+          walk(el);
         }
-        tokens.push({ kind: 'list', items });
       }
-    }
+    })(wrap);
 
+    // ── state machine ──────────────────────────────────────────────────
     let mode = 'preamble';
     const speakerLines = [];
     const sectionTitleLines = [];
@@ -170,67 +256,124 @@
 
     const flush = () => { if (current) result.scenes.push(finalizeBlock(current)); current = null; };
 
+    const addBulletOrMeta = (rawText) => {
+      const text = stripNotes(rawText);
+      if (!text) return;
+      const meta = extractMetaItem(text);
+      if (meta) { current.meta.push(meta); return; }
+      current.bullets.push(splitBulletTime(text.replace(BULLET_PREFIX_RE, '')));
+    };
+
     for (const tk of tokens) {
+      // ── real Word list items ────────────────────────────────────────
       if (tk.kind === 'list') {
         if (current) {
-          for (const itemText of tk.items) {
-            const meta = extractMetaItem(itemText);
-            if (meta) current.meta.push(meta);
-            else current.bullets.push(splitBulletTime(itemText));
-          }
+          tk.items.forEach(addBulletOrMeta);
+        } else {
+          // A list before the first callout: treat as intro meta if tagged.
+          tk.items.forEach(it => {
+            const meta = extractMetaItem(stripNotes(it));
+            if (meta) result.introMeta.push(meta);
+          });
         }
         continue;
       }
 
-      const line = tk.text;
+      const rawLine = tk.text;
+      if (!rawLine) continue;
+
+      // ── callout / slide marker ──────────────────────────────────────
+      const mk = rawLine.match(MARKER_RE);
+      if (mk) {
+        const hadBracket = !!(mk[1] || mk[3]);
+        const rest = mk[4] || '';
+        const range = extractTimeRange(rest);
+        if (hadBracket || range) {
+          flush();
+          current = {
+            start: range ? range.start : 0,
+            end: range ? range.end : 0,
+            titleLines: [],
+            bullets: [],
+            meta: [],
+          };
+          mode = 'slide';
+          continue;
+        }
+      }
+
+      // ── explicit section switches ───────────────────────────────────
+      const sp = rawLine.match(SPEAKER_RE);
+      if (sp) {
+        flush();
+        mode = 'speaker';
+        const inline = stripNotes(sp[1] || '');
+        if (inline) speakerLines.push(inline);
+        continue;
+      }
+
+      const sec = rawLine.match(SECTION_RE);
+      if (sec) {
+        flush();
+        mode = 'section';
+        const inline = stripNotes(sec[1] || '');
+        if (inline) sectionTitleLines.push(inline);
+        continue;
+      }
+
+      // ── intro headline, anywhere before the first callout ───────────
+      if (!current) {
+        const ttl = rawLine.match(TITLE_RE);
+        if (ttl) {
+          const v = stripNotes(ttl[1]);
+          if (v) { result.introHeadline = v; mode = 'preamble'; continue; }
+        }
+      }
+
+      const line = stripNotes(rawLine);
       if (!line) continue;
 
-      const m = line.match(slideStartRe);
-      if (m) {
-        flush();
-        const range = extractTimeRange(m[1]);
-        current = {
-          start: range ? range.start : 0,
-          end:   range ? range.end   : 0,
-          titleLines: [],
-          bullets: [],
-          meta: []
-        };
-        mode = 'slide';
+      // ── inside a callout ────────────────────────────────────────────
+      if (mode === 'slide' && current) {
+        const meta = extractMetaItem(line);
+        if (meta) { current.meta.push(meta); continue; }
+
+        const hadBulletGlyph = BULLET_PREFIX_RE.test(line);
+        const body = line.replace(BULLET_PREFIX_RE, '').trim();
+        if (!body) continue;
+
+        // First plain line becomes the title; everything after is a bullet.
+        if (current.titleLines.length === 0 && current.bullets.length === 0 && !hadBulletGlyph) {
+          current.titleLines.push(squash(body));
+        } else {
+          current.bullets.push(splitBulletTime(body));
+        }
         continue;
       }
 
-      if (/^\[SPEAKER\]/i.test(line)) { mode = 'speaker'; continue; }
-      if (/^\[SECTION TITLE SLIDE/i.test(line)) { mode = 'section'; continue; }
+      // ── speaker block ───────────────────────────────────────────────
+      if (mode === 'speaker') {
+        if (speakerLines.length < 2) speakerLines.push(line);
+        continue;
+      }
 
-      if (mode === 'speaker' && !line.startsWith('[')) {
-        speakerLines.push(line);
-      } else if (mode === 'section' && !line.startsWith('[')) {
+      // ── section title block ─────────────────────────────────────────
+      if (mode === 'section') {
         sectionTitleLines.push(line);
-      } else if (mode === 'slide' && current) {
-        // Detect bullet-prefixed lines: -, •, *, →, ◦, ▪ (common docx bullet chars)
-        // These come from docx files where the user used manual bullet characters
-        // instead of Word's list formatting (mammoth only emits <ul> for proper lists).
-        const bulletMatch = line.match(/^[\-\u2022\*\u2192\u25E6\u25AA\u2023]\s+(.+)$/);
-        if (bulletMatch) {
-          const bulletText = bulletMatch[1].trim();
-          // Also check for [meta] markers in bullet form (industry/hc/locn)
-          const meta = extractMetaItem(bulletText);
-          if (meta) {
-            current.meta.push(meta);
-          } else {
-            current.bullets.push(splitBulletTime(bulletText));
-          }
-        } else {
-          current.titleLines.push(line);
-        }
+        continue;
+      }
+
+      // ── preamble: pick up intro meta, ignore everything else ────────
+      if (mode === 'preamble') {
+        const meta = extractMetaItem(line);
+        if (meta) result.introMeta.push(meta);
       }
     }
     flush();
 
     if (speakerLines.length >= 1) result.speaker.name = speakerLines[0];
     if (speakerLines.length >= 2) result.speaker.designation = speakerLines[1];
-    if (sectionTitleLines.length > 0) result.introHeadline = sectionTitleLines.join(' ');
+    if (sectionTitleLines.length > 0) result.introHeadline = result.introHeadline || sectionTitleLines.join(' ');
 
     return result;
   }
