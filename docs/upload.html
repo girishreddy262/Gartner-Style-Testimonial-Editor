@@ -165,9 +165,10 @@
       </div>`;
     }
     if (p.introHeadline) {
+      const im = (p.introMeta || []).map(i => i.text).join(' · ');
       html += `<div class="preview-scene" style="border-left-color:#a78bfa">
         <div class="preview-scene-name">Intro: ${escapeHtml(p.introHeadline)}</div>
-        <div class="preview-scene-meta">0:00 – 0:05</div>
+        <div class="preview-scene-meta">0:00 – 0:05${im ? ' · ' + escapeHtml(im) : ''}</div>
       </div>`;
     }
     p.scenes.forEach(s => {
@@ -234,8 +235,12 @@
 
     // ── INTRO ───────────────────────────────────────────────────────────
     // Pull meta icons from FIRST meta_intro scene if present. Otherwise leave blank.
+    // Prefer the HC / Industry / Geo lines found before the first callout.
+    // Fall back to the first meta_intro scene for older-format docs.
     const firstMetaScene = scenes.find(s => s.layout === 'meta_intro');
-    const metaItems = firstMetaScene ? (firstMetaScene.props.items || []) : [];
+    const metaItems = (parsed.introMeta && parsed.introMeta.length)
+      ? parsed.introMeta
+      : (firstMetaScene ? (firstMetaScene.props.items || []) : []);
     const findMetaText = (iconType) => {
       const m = metaItems.find(it => ICON_KIND_MAP[it.icon] === iconType);
       return m ? m.text : '';
